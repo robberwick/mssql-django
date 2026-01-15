@@ -180,6 +180,330 @@ class TestIndexesBeingDropped(TestCase):
         except ProgrammingError:
             self.fail("Unique indexes not being dropped")
 
+class TestMultiColumnIndexRetained(TestCase):
+    """
+    Regression test for multi-column indexes (defined via Meta.indexes) being dropped 
+    and not recreated after altering one of the indexed columns.
+    
+    Tests various schema operations that trigger index drop/recreate logic to ensure
+    multi-column indexes are properly restored.
+    """
+
+    def test_multi_column_index_retained_after_type_change(self):
+        """
+        Test that multi-column indexes are retained when altering field type (max_length change).
+        This exercises the type change code path in _alter_field.
+        """
+        operations = [
+            migrations.CreateModel(
+                "TestMultiColumnIndex",
+                [
+                    ("id", models.AutoField(primary_key=True)),
+                    ("a", models.CharField(max_length=20)),
+                    ("b", models.CharField(max_length=20)),
+                ]
+            ),
+            migrations.AddIndex(
+                model_name='testmulticolumnindex',
+                index=models.Index(fields=['a', 'b'], name='test_mc_idx'),
+            ),
+            migrations.AlterField(
+                "testmulticolumnindex",
+                "a",
+                models.CharField(max_length=40),
+            )
+        ]
+
+        project_state = ProjectState()
+        new_state = project_state.clone()
+        migration = Migration("test_migration", "testapp")
+        migration.operations = operations
+
+        with connection.schema_editor(atomic=True) as editor:
+            migration.apply(new_state, editor)
+
+        model = new_state.apps.get_model("testapp", "TestMultiColumnIndex")
+
+        try:
+            constraints = get_constraints(table_name=model._meta.db_table)
+            found = any(
+                set(info['columns']) == {'a', 'b'} and info['index']
+                for info in constraints.values()
+            )
+            assert found, (
+                "Multi-column index on ('a', 'b') was not recreated after field type change. "
+                "Expected index to be restored after ALTER COLUMN operation."
+            )
+        finally:
+            with connection.schema_editor(atomic=True) as editor:
+                editor.delete_model(model)
+
+    def test_multi_column_index_retained_after_nullability_change(self):
+        """
+        Test that multi-column indexes are retained when changing field nullability.
+        This exercises the nullability change code path in _alter_field.
+        """
+        operations = [
+            migrations.CreateModel(
+                "TestMultiColumnIndex",
+                [
+                    ("id", models.AutoField(primary_key=True)),
+                    ("a", models.CharField(max_length=20)),
+                    ("b", models.CharField(max_length=20)),
+                ]
+            ),
+            migrations.AddIndex(
+                model_name='testmulticolumnindex',
+                index=models.Index(fields=['a', 'b'], name='test_mc_idx'),
+            ),
+            migrations.AlterField(
+                "testmulticolumnindex",
+                "b",
+                models.CharField(max_length=20, null=True),
+            )
+        ]
+
+        project_state = ProjectState()
+        new_state = project_state.clone()
+        migration = Migration("test_migration", "testapp")
+        migration.operations = operations
+
+        with connection.schema_editor(atomic=True) as editor:
+            migration.apply(new_state, editor)
+
+        model = new_state.apps.get_model("testapp", "TestMultiColumnIndex")
+
+        try:
+            constraints = get_constraints(table_name=model._meta.db_table)
+            found = any(
+                set(info['columns']) == {'a', 'b'} and info['index']
+                for info in constraints.values()
+            )
+            assert found, (
+                "Multi-column index on ('a', 'b') was not recreated after nullability change. "
+                "Expected index to be restored after ALTER COLUMN NULL operation."
+            )
+        finally:
+            with connection.schema_editor(atomic=True) as editor:
+                editor.delete_model(model)
+
+    def test_multi_column_index_retained_after_field_rename(self):
+        """
+        Test that multi-column indexes are retained and updated when renaming a field.
+        The index should exist on the renamed column.
+        """
+        operations = [
+            migrations.CreateModel(
+                "TestMultiColumnIndex",
+                [
+                    ("id", models.AutoField(primary_key=True)),
+                    ("a", models.CharField(max_length=20)),
+                    ("b", models.CharField(max_length=20)),
+                ]
+            ),
+            migrations.AddIndex(
+                model_name='testmulticolumnindex',
+                index=models.Index(fields=['a', 'b'], name='test_mc_idx'),
+            ),
+            migrations.RenameField(
+                model_name="testmulticolumnindex",
+                old_name="a",
+                new_name="a_renamed",
+            )
+        ]
+
+        project_state = ProjectState()
+        new_state = project_state.clone()
+        migration = Migration("test_migration", "testapp")
+        migration.operations = operations
+
+        with connection.schema_editor(atomic=True) as editor:
+            migration.apply(new_state, editor)
+
+        model = new_state.apps.get_model("testapp", "TestMultiColumnIndex")
+
+        try:
+            constraints = get_constraints(table_name=model._meta.db_table)
+            found = any(
+                set(info['columns']) == {'a_renamed', 'b'} and info['index']
+                for info in constraints.values()
+            )
+            assert found, (
+                "Multi-column index on ('a_renamed', 'b') was not found after field rename. "
+                "Expected index to be updated to reflect the renamed column."
+            )
+        finally:
+            with connection.schema_editor(atomic=True) as editor:
+                editor.delete_model(model)
+
+    def test_multi_column_index_retained_after_altering_both_fields(self):
+        """
+        Test that multi-column indexes are retained when altering multiple fields in the index.
+        This ensures the index is properly restored even when both participating columns are altered.
+        """
+        operations = [
+            migrations.CreateModel(
+                "TestMultiColumnIndex",
+                [
+                    ("id", models.AutoField(primary_key=True)),
+                    ("a", models.CharField(max_length=20)),
+                    ("b", models.CharField(max_length=20)),
+                ]
+            ),
+            migrations.AddIndex(
+                model_name='testmulticolumnindex',
+                index=models.Index(fields=['a', 'b'], name='test_mc_idx'),
+            ),
+            migrations.AlterField(
+                "testmulticolumnindex",
+                "a",
+                models.CharField(max_length=40),
+            ),
+            migrations.AlterField(
+                "testmulticolumnindex",
+                "b",
+                models.CharField(max_length=30),
+            )
+        ]
+
+        project_state = ProjectState()
+        new_state = project_state.clone()
+        migration = Migration("test_migration", "testapp")
+        migration.operations = operations
+
+        with connection.schema_editor(atomic=True) as editor:
+            migration.apply(new_state, editor)
+
+        model = new_state.apps.get_model("testapp", "TestMultiColumnIndex")
+
+        try:
+            constraints = get_constraints(table_name=model._meta.db_table)
+            found = any(
+                set(info['columns']) == {'a', 'b'} and info['index']
+                for info in constraints.values()
+            )
+            assert found, (
+                "Multi-column index on ('a', 'b') was not recreated after altering both fields. "
+                "Expected index to be restored after multiple ALTER COLUMN operations."
+            )
+        finally:
+            with connection.schema_editor(atomic=True) as editor:
+                editor.delete_model(model)
+
+    def test_three_column_index_retained_after_field_alteration(self):
+        """
+        Test that indexes with 3+ columns are retained when altering one of the fields.
+        This ensures the fix works for indexes with more than 2 columns.
+        """
+        operations = [
+            migrations.CreateModel(
+                "TestMultiColumnIndex",
+                [
+                    ("id", models.AutoField(primary_key=True)),
+                    ("a", models.CharField(max_length=20)),
+                    ("b", models.CharField(max_length=20)),
+                    ("c", models.CharField(max_length=20)),
+                ]
+            ),
+            migrations.AddIndex(
+                model_name='testmulticolumnindex',
+                index=models.Index(fields=['a', 'b', 'c'], name='test_mc_idx_3col'),
+            ),
+            migrations.AlterField(
+                "testmulticolumnindex",
+                "b",
+                models.CharField(max_length=50),
+            )
+        ]
+
+        project_state = ProjectState()
+        new_state = project_state.clone()
+        migration = Migration("test_migration", "testapp")
+        migration.operations = operations
+
+        with connection.schema_editor(atomic=True) as editor:
+            migration.apply(new_state, editor)
+
+        model = new_state.apps.get_model("testapp", "TestMultiColumnIndex")
+
+        try:
+            constraints = get_constraints(table_name=model._meta.db_table)
+            found = any(
+                set(info['columns']) == {'a', 'b', 'c'} and info['index']
+                for info in constraints.values()
+            )
+            assert found, (
+                "Three-column index on ('a', 'b', 'c') was not recreated after field alteration. "
+                "Expected index to be restored after ALTER COLUMN operation on middle column."
+            )
+        finally:
+            with connection.schema_editor(atomic=True) as editor:
+                editor.delete_model(model)
+
+    def test_field_with_db_index_and_multi_column_index_retained(self):
+        """
+        Test that both single-column and multi-column indexes are retained when
+        a field has db_index=True and also participates in a multi-column index.
+        """
+        operations = [
+            migrations.CreateModel(
+                "TestMultiColumnIndex",
+                [
+                    ("id", models.AutoField(primary_key=True)),
+                    ("a", models.CharField(max_length=20, db_index=True)),
+                    ("b", models.CharField(max_length=20)),
+                ]
+            ),
+            migrations.AddIndex(
+                model_name='testmulticolumnindex',
+                index=models.Index(fields=['a', 'b'], name='test_mc_idx'),
+            ),
+            migrations.AlterField(
+                "testmulticolumnindex",
+                "a",
+                models.CharField(max_length=40, db_index=True),
+            )
+        ]
+
+        project_state = ProjectState()
+        new_state = project_state.clone()
+        migration = Migration("test_migration", "testapp")
+        migration.operations = operations
+
+        with connection.schema_editor(atomic=True) as editor:
+            migration.apply(new_state, editor)
+
+        model = new_state.apps.get_model("testapp", "TestMultiColumnIndex")
+
+        try:
+            constraints = get_constraints(table_name=model._meta.db_table)
+            
+            # Check for single-column index on 'a' (from db_index=True)
+            single_col_index_found = any(
+                set(info['columns']) == {'a'} and info['index']
+                for info in constraints.values()
+            )
+            
+            # Check for multi-column index on 'a', 'b' (from Meta.indexes)
+            multi_col_index_found = any(
+                set(info['columns']) == {'a', 'b'} and info['index']
+                for info in constraints.values()
+            )
+            
+            assert single_col_index_found, (
+                "Single-column index on 'a' (from db_index=True) was not recreated "
+                "after field type change."
+            )
+            
+            assert multi_col_index_found, (
+                "Multi-column index on ('a', 'b') was not recreated after field type change."
+            )
+        finally:
+            with connection.schema_editor(atomic=True) as editor:
+                editor.delete_model(model)
+
+
+
 class TestAddAndAlterUniqueIndex(TestCase):
 
     def test_alter_unique_nullable_to_non_nullable(self):
