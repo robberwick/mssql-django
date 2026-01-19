@@ -8,7 +8,7 @@ from django.db.migrations.migration import Migration
 from django.db.migrations.state import ProjectState
 from django.db.models import UniqueConstraint
 from django.db.utils import DEFAULT_DB_ALIAS, ConnectionHandler, ProgrammingError
-from django.test import TestCase
+from django.test import TestCase, TransactionTestCase
 from unittest import skipIf
 
 from . import get_constraints
@@ -180,327 +180,404 @@ class TestIndexesBeingDropped(TestCase):
         except ProgrammingError:
             self.fail("Unique indexes not being dropped")
 
-class TestMultiColumnIndexRetained(TestCase):
+class TestMultiColumnIndexRetained(TransactionTestCase):
     """
-    Regression test for multi-column indexes (defined via Meta.indexes) being dropped 
+    Regression test for multi-column indexes (defined via Meta.indexes) being dropped
     and not recreated after altering one of the indexed columns.
-    
+
     Tests various schema operations that trigger index drop/recreate logic to ensure
     multi-column indexes are properly restored.
+    
+    Each test runs twice:
+    - With migrations in split contexts (simulates separate migration files)
+    - With migrations in combined context (simulates single migration file with multiple operations)
     """
+
+    def _run_migration_test(
+        self,
+        MigrationA,
+        MigrationB,
+        migration_name_prefix,
+        model_name,
+        expected_index_columns,
+        use_single_context,
+        error_msg,
+        expected_single_col_index=None,
+        single_col_error_msg=None,
+    ):
+        """
+        Helper to run migration tests with either combined or split schema_editor contexts.
+        
+        Args:
+            MigrationA: Migration class for initial setup (CreateModel + AddIndex)
+            MigrationB: Migration class for the alteration being tested
+            migration_name_prefix: Prefix for migration names (e.g., 'test_mc_type')
+            model_name: Name of the model being tested
+            expected_index_columns: Set of column names expected in the multi-column index
+            use_single_context: If True, apply both migrations in one schema_editor context
+            error_msg: Assertion message if multi-column index is not found
+            expected_single_col_index: Optional set of column names for single-column index check
+            single_col_error_msg: Optional assertion message if single-column index is not found
+        """
+        connection = connections['default']
+        suffix = '_combined' if use_single_context else '_split'
+        migration_a = MigrationA(name=f'{migration_name_prefix}{suffix}_a', app_label='testapp')
+        migration_b = MigrationB(name=f'{migration_name_prefix}{suffix}_b', app_label='testapp')
+
+        if use_single_context:
+            # Combined: both migrations in one schema_editor context
+            # This simulates combining operations in a single migration file
+            with connection.schema_editor(atomic=True) as editor:
+                project_state = migration_a.apply(ProjectState(), editor)
+                migration_b.apply(project_state, editor)
+        else:
+            # Split: each migration in its own schema_editor context
+            # This simulates two separate migration files
+            with connection.schema_editor(atomic=True) as editor:
+                project_state = migration_a.apply(ProjectState(), editor)
+            with connection.schema_editor(atomic=True) as editor:
+                migration_b.apply(project_state, editor)
+
+        # Verify multi-column index exists
+        model = project_state.apps.get_model('testapp', model_name)
+        constraints = get_constraints(table_name=model._meta.db_table)
+        
+        found = any(
+            set(info['columns']) == expected_index_columns and info['index']
+            for info in constraints.values()
+        )
+        assert found, error_msg
+        
+        # Optional: verify single-column index exists (for db_index=True tests)
+        if expected_single_col_index is not None:
+            single_col_found = any(
+                set(info['columns']) == expected_single_col_index and info['index']
+                for info in constraints.values()
+            )
+            assert single_col_found, single_col_error_msg
 
     def test_multi_column_index_retained_after_type_change(self):
         """
         Test that multi-column indexes are retained when altering field type (max_length change).
         This exercises the type change code path in _alter_field.
+        Runs with both split and combined migration contexts.
         """
-        operations = [
-            migrations.CreateModel(
-                "TestMultiColumnIndex",
-                [
-                    ("id", models.AutoField(primary_key=True)),
-                    ("a", models.CharField(max_length=20)),
-                    ("b", models.CharField(max_length=20)),
-                ]
-            ),
-            migrations.AddIndex(
-                model_name='testmulticolumnindex',
-                index=models.Index(fields=['a', 'b'], name='test_mc_idx'),
-            ),
-            migrations.AlterField(
-                "testmulticolumnindex",
-                "a",
-                models.CharField(max_length=40),
-            )
-        ]
+        for use_single_context in [False, True]:
+            context_desc = "combined context" if use_single_context else "split contexts"
+            with self.subTest(single_context=use_single_context):
+                suffix = '_combined' if use_single_context else '_split'
+                model_name = f'TestMCIdxType{suffix}'
+                
+                class TestMigrationA(migrations.Migration):
+                    initial = True
 
-        project_state = ProjectState()
-        new_state = project_state.clone()
-        migration = Migration("test_migration", "testapp")
-        migration.operations = operations
+                    operations = [
+                        migrations.CreateModel(
+                            name=model_name,
+                            fields=[
+                                ('id', models.AutoField(primary_key=True)),
+                                ('a', models.CharField(max_length=20)),
+                                ('b', models.CharField(max_length=20)),
+                            ],
+                        ),
+                        migrations.AddIndex(
+                            model_name=model_name.lower(),
+                            index=models.Index(fields=['a', 'b'], name=f'idx_type{suffix}'),
+                        ),
+                    ]
 
-        with connection.schema_editor(atomic=True) as editor:
-            migration.apply(new_state, editor)
+                class TestMigrationB(migrations.Migration):
+                    operations = [
+                        migrations.AlterField(
+                            model_name=model_name.lower(),
+                            name='a',
+                            field=models.CharField(max_length=40),
+                        ),
+                    ]
 
-        model = new_state.apps.get_model("testapp", "TestMultiColumnIndex")
-
-        try:
-            constraints = get_constraints(table_name=model._meta.db_table)
-            found = any(
-                set(info['columns']) == {'a', 'b'} and info['index']
-                for info in constraints.values()
-            )
-            assert found, (
-                "Multi-column index on ('a', 'b') was not recreated after field type change. "
-                "Expected index to be restored after ALTER COLUMN operation."
-            )
-        finally:
-            with connection.schema_editor(atomic=True) as editor:
-                editor.delete_model(model)
+                self._run_migration_test(
+                    MigrationA=TestMigrationA,
+                    MigrationB=TestMigrationB,
+                    migration_name_prefix='test_mc_type',
+                    model_name=model_name,
+                    expected_index_columns={'a', 'b'},
+                    use_single_context=use_single_context,
+                    error_msg=(
+                        f"Multi-column index on ('a', 'b') was not recreated after field type change "
+                        f"({context_desc}). Expected index to be restored after ALTER COLUMN operation."
+                    ),
+                )
 
     def test_multi_column_index_retained_after_nullability_change(self):
         """
         Test that multi-column indexes are retained when changing field nullability.
         This exercises the nullability change code path in _alter_field.
+        Runs with both split and combined migration contexts.
         """
-        operations = [
-            migrations.CreateModel(
-                "TestMultiColumnIndex",
-                [
-                    ("id", models.AutoField(primary_key=True)),
-                    ("a", models.CharField(max_length=20)),
-                    ("b", models.CharField(max_length=20)),
-                ]
-            ),
-            migrations.AddIndex(
-                model_name='testmulticolumnindex',
-                index=models.Index(fields=['a', 'b'], name='test_mc_idx'),
-            ),
-            migrations.AlterField(
-                "testmulticolumnindex",
-                "b",
-                models.CharField(max_length=20, null=True),
-            )
-        ]
+        for use_single_context in [False, True]:
+            context_desc = "combined context" if use_single_context else "split contexts"
+            with self.subTest(single_context=use_single_context):
+                suffix = '_combined' if use_single_context else '_split'
+                model_name = f'TestMCIdxNull{suffix}'
+                
+                class TestMigrationA(migrations.Migration):
+                    initial = True
 
-        project_state = ProjectState()
-        new_state = project_state.clone()
-        migration = Migration("test_migration", "testapp")
-        migration.operations = operations
+                    operations = [
+                        migrations.CreateModel(
+                            name=model_name,
+                            fields=[
+                                ('id', models.AutoField(primary_key=True)),
+                                ('a', models.CharField(max_length=20)),
+                                ('b', models.CharField(max_length=20)),
+                            ],
+                        ),
+                        migrations.AddIndex(
+                            model_name=model_name.lower(),
+                            index=models.Index(fields=['a', 'b'], name=f'idx_null{suffix}'),
+                        ),
+                    ]
 
-        with connection.schema_editor(atomic=True) as editor:
-            migration.apply(new_state, editor)
+                class TestMigrationB(migrations.Migration):
+                    operations = [
+                        migrations.AlterField(
+                            model_name=model_name.lower(),
+                            name='b',
+                            field=models.CharField(max_length=20, null=True),
+                        ),
+                    ]
 
-        model = new_state.apps.get_model("testapp", "TestMultiColumnIndex")
-
-        try:
-            constraints = get_constraints(table_name=model._meta.db_table)
-            found = any(
-                set(info['columns']) == {'a', 'b'} and info['index']
-                for info in constraints.values()
-            )
-            assert found, (
-                "Multi-column index on ('a', 'b') was not recreated after nullability change. "
-                "Expected index to be restored after ALTER COLUMN NULL operation."
-            )
-        finally:
-            with connection.schema_editor(atomic=True) as editor:
-                editor.delete_model(model)
+                self._run_migration_test(
+                    MigrationA=TestMigrationA,
+                    MigrationB=TestMigrationB,
+                    migration_name_prefix='test_mc_null',
+                    model_name=model_name,
+                    expected_index_columns={'a', 'b'},
+                    use_single_context=use_single_context,
+                    error_msg=(
+                        f"Multi-column index on ('a', 'b') was not recreated after nullability change "
+                        f"({context_desc}). Expected index to be restored after ALTER COLUMN NULL operation."
+                    ),
+                )
 
     def test_multi_column_index_retained_after_field_rename(self):
         """
         Test that multi-column indexes are retained and updated when renaming a field.
         The index should exist on the renamed column.
+        Runs with both split and combined migration contexts.
         """
-        operations = [
-            migrations.CreateModel(
-                "TestMultiColumnIndex",
-                [
-                    ("id", models.AutoField(primary_key=True)),
-                    ("a", models.CharField(max_length=20)),
-                    ("b", models.CharField(max_length=20)),
-                ]
-            ),
-            migrations.AddIndex(
-                model_name='testmulticolumnindex',
-                index=models.Index(fields=['a', 'b'], name='test_mc_idx'),
-            ),
-            migrations.RenameField(
-                model_name="testmulticolumnindex",
-                old_name="a",
-                new_name="a_renamed",
-            )
-        ]
+        for use_single_context in [False, True]:
+            context_desc = "combined context" if use_single_context else "split contexts"
+            with self.subTest(single_context=use_single_context):
+                suffix = '_combined' if use_single_context else '_split'
+                model_name = f'TestMCIdxRename{suffix}'
+                
+                class TestMigrationA(migrations.Migration):
+                    initial = True
 
-        project_state = ProjectState()
-        new_state = project_state.clone()
-        migration = Migration("test_migration", "testapp")
-        migration.operations = operations
+                    operations = [
+                        migrations.CreateModel(
+                            name=model_name,
+                            fields=[
+                                ('id', models.AutoField(primary_key=True)),
+                                ('a', models.CharField(max_length=20)),
+                                ('b', models.CharField(max_length=20)),
+                            ],
+                        ),
+                        migrations.AddIndex(
+                            model_name=model_name.lower(),
+                            index=models.Index(fields=['a', 'b'], name=f'idx_rename{suffix}'),
+                        ),
+                    ]
 
-        with connection.schema_editor(atomic=True) as editor:
-            migration.apply(new_state, editor)
+                class TestMigrationB(migrations.Migration):
+                    operations = [
+                        migrations.RenameField(
+                            model_name=model_name.lower(),
+                            old_name='a',
+                            new_name='a_renamed',
+                        ),
+                    ]
 
-        model = new_state.apps.get_model("testapp", "TestMultiColumnIndex")
-
-        try:
-            constraints = get_constraints(table_name=model._meta.db_table)
-            found = any(
-                set(info['columns']) == {'a_renamed', 'b'} and info['index']
-                for info in constraints.values()
-            )
-            assert found, (
-                "Multi-column index on ('a_renamed', 'b') was not found after field rename. "
-                "Expected index to be updated to reflect the renamed column."
-            )
-        finally:
-            with connection.schema_editor(atomic=True) as editor:
-                editor.delete_model(model)
+                self._run_migration_test(
+                    MigrationA=TestMigrationA,
+                    MigrationB=TestMigrationB,
+                    migration_name_prefix='test_mc_rename',
+                    model_name=model_name,
+                    expected_index_columns={'a_renamed', 'b'},
+                    use_single_context=use_single_context,
+                    error_msg=(
+                        f"Multi-column index on ('a_renamed', 'b') was not found after field rename "
+                        f"({context_desc}). Expected index to be updated to reflect the renamed column."
+                    ),
+                )
 
     def test_multi_column_index_retained_after_altering_both_fields(self):
         """
         Test that multi-column indexes are retained when altering multiple fields in the index.
         This ensures the index is properly restored even when both participating columns are altered.
+        Runs with both split and combined migration contexts.
         """
-        operations = [
-            migrations.CreateModel(
-                "TestMultiColumnIndex",
-                [
-                    ("id", models.AutoField(primary_key=True)),
-                    ("a", models.CharField(max_length=20)),
-                    ("b", models.CharField(max_length=20)),
-                ]
-            ),
-            migrations.AddIndex(
-                model_name='testmulticolumnindex',
-                index=models.Index(fields=['a', 'b'], name='test_mc_idx'),
-            ),
-            migrations.AlterField(
-                "testmulticolumnindex",
-                "a",
-                models.CharField(max_length=40),
-            ),
-            migrations.AlterField(
-                "testmulticolumnindex",
-                "b",
-                models.CharField(max_length=30),
-            )
-        ]
+        for use_single_context in [False, True]:
+            context_desc = "combined context" if use_single_context else "split contexts"
+            with self.subTest(single_context=use_single_context):
+                suffix = '_combined' if use_single_context else '_split'
+                model_name = f'TestMCIdxBoth{suffix}'
+                
+                class TestMigrationA(migrations.Migration):
+                    initial = True
 
-        project_state = ProjectState()
-        new_state = project_state.clone()
-        migration = Migration("test_migration", "testapp")
-        migration.operations = operations
+                    operations = [
+                        migrations.CreateModel(
+                            name=model_name,
+                            fields=[
+                                ('id', models.AutoField(primary_key=True)),
+                                ('a', models.CharField(max_length=20)),
+                                ('b', models.CharField(max_length=20)),
+                            ],
+                        ),
+                        migrations.AddIndex(
+                            model_name=model_name.lower(),
+                            index=models.Index(fields=['a', 'b'], name=f'idx_both{suffix}'),
+                        ),
+                    ]
 
-        with connection.schema_editor(atomic=True) as editor:
-            migration.apply(new_state, editor)
+                class TestMigrationB(migrations.Migration):
+                    operations = [
+                        migrations.AlterField(
+                            model_name=model_name.lower(),
+                            name='a',
+                            field=models.CharField(max_length=40),
+                        ),
+                        migrations.AlterField(
+                            model_name=model_name.lower(),
+                            name='b',
+                            field=models.CharField(max_length=30),
+                        ),
+                    ]
 
-        model = new_state.apps.get_model("testapp", "TestMultiColumnIndex")
-
-        try:
-            constraints = get_constraints(table_name=model._meta.db_table)
-            found = any(
-                set(info['columns']) == {'a', 'b'} and info['index']
-                for info in constraints.values()
-            )
-            assert found, (
-                "Multi-column index on ('a', 'b') was not recreated after altering both fields. "
-                "Expected index to be restored after multiple ALTER COLUMN operations."
-            )
-        finally:
-            with connection.schema_editor(atomic=True) as editor:
-                editor.delete_model(model)
+                self._run_migration_test(
+                    MigrationA=TestMigrationA,
+                    MigrationB=TestMigrationB,
+                    migration_name_prefix='test_mc_both',
+                    model_name=model_name,
+                    expected_index_columns={'a', 'b'},
+                    use_single_context=use_single_context,
+                    error_msg=(
+                        f"Multi-column index on ('a', 'b') was not recreated after altering both fields "
+                        f"({context_desc}). Expected index to be restored after multiple ALTER COLUMN operations."
+                    ),
+                )
 
     def test_three_column_index_retained_after_field_alteration(self):
         """
         Test that indexes with 3+ columns are retained when altering one of the fields.
         This ensures the fix works for indexes with more than 2 columns.
+        Runs with both split and combined migration contexts.
         """
-        operations = [
-            migrations.CreateModel(
-                "TestMultiColumnIndex",
-                [
-                    ("id", models.AutoField(primary_key=True)),
-                    ("a", models.CharField(max_length=20)),
-                    ("b", models.CharField(max_length=20)),
-                    ("c", models.CharField(max_length=20)),
-                ]
-            ),
-            migrations.AddIndex(
-                model_name='testmulticolumnindex',
-                index=models.Index(fields=['a', 'b', 'c'], name='test_mc_idx_3col'),
-            ),
-            migrations.AlterField(
-                "testmulticolumnindex",
-                "b",
-                models.CharField(max_length=50),
-            )
-        ]
+        for use_single_context in [False, True]:
+            context_desc = "combined context" if use_single_context else "split contexts"
+            with self.subTest(single_context=use_single_context):
+                suffix = '_combined' if use_single_context else '_split'
+                model_name = f'TestMCIdx3Col{suffix}'
+                
+                class TestMigrationA(migrations.Migration):
+                    initial = True
 
-        project_state = ProjectState()
-        new_state = project_state.clone()
-        migration = Migration("test_migration", "testapp")
-        migration.operations = operations
+                    operations = [
+                        migrations.CreateModel(
+                            name=model_name,
+                            fields=[
+                                ('id', models.AutoField(primary_key=True)),
+                                ('a', models.CharField(max_length=20)),
+                                ('b', models.CharField(max_length=20)),
+                                ('c', models.CharField(max_length=20)),
+                            ],
+                        ),
+                        migrations.AddIndex(
+                            model_name=model_name.lower(),
+                            index=models.Index(fields=['a', 'b', 'c'], name=f'idx_3col{suffix}'),
+                        ),
+                    ]
 
-        with connection.schema_editor(atomic=True) as editor:
-            migration.apply(new_state, editor)
+                class TestMigrationB(migrations.Migration):
+                    operations = [
+                        migrations.AlterField(
+                            model_name=model_name.lower(),
+                            name='b',
+                            field=models.CharField(max_length=50),
+                        ),
+                    ]
 
-        model = new_state.apps.get_model("testapp", "TestMultiColumnIndex")
-
-        try:
-            constraints = get_constraints(table_name=model._meta.db_table)
-            found = any(
-                set(info['columns']) == {'a', 'b', 'c'} and info['index']
-                for info in constraints.values()
-            )
-            assert found, (
-                "Three-column index on ('a', 'b', 'c') was not recreated after field alteration. "
-                "Expected index to be restored after ALTER COLUMN operation on middle column."
-            )
-        finally:
-            with connection.schema_editor(atomic=True) as editor:
-                editor.delete_model(model)
+                self._run_migration_test(
+                    MigrationA=TestMigrationA,
+                    MigrationB=TestMigrationB,
+                    migration_name_prefix='test_mc_3col',
+                    model_name=model_name,
+                    expected_index_columns={'a', 'b', 'c'},
+                    use_single_context=use_single_context,
+                    error_msg=(
+                        f"Three-column index on ('a', 'b', 'c') was not recreated after field alteration "
+                        f"({context_desc}). Expected index to be restored after ALTER COLUMN operation on middle column."
+                    ),
+                )
 
     def test_field_with_db_index_and_multi_column_index_retained(self):
         """
         Test that both single-column and multi-column indexes are retained when
         a field has db_index=True and also participates in a multi-column index.
+        Runs with both split and combined migration contexts.
         """
-        operations = [
-            migrations.CreateModel(
-                "TestMultiColumnIndex",
-                [
-                    ("id", models.AutoField(primary_key=True)),
-                    ("a", models.CharField(max_length=20, db_index=True)),
-                    ("b", models.CharField(max_length=20)),
-                ]
-            ),
-            migrations.AddIndex(
-                model_name='testmulticolumnindex',
-                index=models.Index(fields=['a', 'b'], name='test_mc_idx'),
-            ),
-            migrations.AlterField(
-                "testmulticolumnindex",
-                "a",
-                models.CharField(max_length=40, db_index=True),
-            )
-        ]
+        for use_single_context in [False, True]:
+            context_desc = "combined context" if use_single_context else "split contexts"
+            with self.subTest(single_context=use_single_context):
+                suffix = '_combined' if use_single_context else '_split'
+                model_name = f'TestMCIdxDbIdx{suffix}'
+                
+                class TestMigrationA(migrations.Migration):
+                    initial = True
 
-        project_state = ProjectState()
-        new_state = project_state.clone()
-        migration = Migration("test_migration", "testapp")
-        migration.operations = operations
+                    operations = [
+                        migrations.CreateModel(
+                            name=model_name,
+                            fields=[
+                                ('id', models.AutoField(primary_key=True)),
+                                ('a', models.CharField(max_length=20, db_index=True)),
+                                ('b', models.CharField(max_length=20)),
+                            ],
+                        ),
+                        migrations.AddIndex(
+                            model_name=model_name.lower(),
+                            index=models.Index(fields=['a', 'b'], name=f'idx_dbidx{suffix}'),
+                        ),
+                    ]
 
-        with connection.schema_editor(atomic=True) as editor:
-            migration.apply(new_state, editor)
+                class TestMigrationB(migrations.Migration):
+                    operations = [
+                        migrations.AlterField(
+                            model_name=model_name.lower(),
+                            name='a',
+                            field=models.CharField(max_length=40, db_index=True),
+                        ),
+                    ]
 
-        model = new_state.apps.get_model("testapp", "TestMultiColumnIndex")
-
-        try:
-            constraints = get_constraints(table_name=model._meta.db_table)
-            
-            # Check for single-column index on 'a' (from db_index=True)
-            single_col_index_found = any(
-                set(info['columns']) == {'a'} and info['index']
-                for info in constraints.values()
-            )
-            
-            # Check for multi-column index on 'a', 'b' (from Meta.indexes)
-            multi_col_index_found = any(
-                set(info['columns']) == {'a', 'b'} and info['index']
-                for info in constraints.values()
-            )
-            
-            assert single_col_index_found, (
-                "Single-column index on 'a' (from db_index=True) was not recreated "
-                "after field type change."
-            )
-            
-            assert multi_col_index_found, (
-                "Multi-column index on ('a', 'b') was not recreated after field type change."
-            )
-        finally:
-            with connection.schema_editor(atomic=True) as editor:
-                editor.delete_model(model)
+                self._run_migration_test(
+                    MigrationA=TestMigrationA,
+                    MigrationB=TestMigrationB,
+                    migration_name_prefix='test_mc_dbidx',
+                    model_name=model_name,
+                    expected_index_columns={'a', 'b'},
+                    use_single_context=use_single_context,
+                    error_msg=(
+                        f"Multi-column index on ('a', 'b') was not recreated after field type change "
+                        f"({context_desc})."
+                    ),
+                    expected_single_col_index={'a'},
+                    single_col_error_msg=(
+                        f"Single-column index on 'a' (from db_index=True) was not recreated "
+                        f"after field type change ({context_desc})."
+                    ),
+                )
 
 
 
