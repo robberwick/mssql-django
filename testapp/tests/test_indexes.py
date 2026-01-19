@@ -1,4 +1,5 @@
 import logging
+from collections import namedtuple
 
 import django.db
 from django import VERSION
@@ -28,6 +29,9 @@ else:
     connection = DefaultConnectionProxy()
 
 logger = logging.getLogger('mssql.tests')
+
+# Result type for migration test helper
+MigrationTestResult = namedtuple('MigrationTestResult', ['model', 'constraints', 'project_state'])
 
 
 class TestIndexesRetained(TestCase):
@@ -116,7 +120,7 @@ class TestCorrectIndexes(TestCase):
                 expected_index_causes = []
                 if field.db_index:
                     expected_index_causes.append('db_index=True')
-                if VERSION < (5, 1):     
+                if VERSION < (5, 1):
                    for field_names in model_cls._meta.index_together:
                       if field.name in field_names:
                          expected_index_causes.append(f'index_together[{field_names}]')
@@ -187,7 +191,7 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
 
     Tests various schema operations that trigger index drop/recreate logic to ensure
     multi-column indexes are properly restored.
-    
+
     Each test runs twice:
     - With migrations in split contexts (simulates separate migration files)
     - With migrations in combined context (simulates single migration file with multiple operations)
@@ -195,29 +199,24 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
 
     def _run_migration_test(
         self,
-        MigrationA,
-        MigrationB,
-        migration_name_prefix,
-        model_name,
-        expected_index_columns,
-        use_single_context,
-        error_msg,
-        expected_single_col_index=None,
-        single_col_error_msg=None,
-    ):
+        MigrationA: type[Migration],
+        MigrationB: type[Migration],
+        migration_name_prefix: str,
+        model_name: str,
+        use_single_context: bool,
+    ) -> MigrationTestResult:
         """
         Helper to run migration tests with either combined or split schema_editor contexts.
-        
+
         Args:
             MigrationA: Migration class for initial setup (CreateModel + AddIndex)
             MigrationB: Migration class for the alteration being tested
             migration_name_prefix: Prefix for migration names (e.g., 'test_mc_type')
             model_name: Name of the model being tested
-            expected_index_columns: Set of column names expected in the multi-column index
             use_single_context: If True, apply both migrations in one schema_editor context
-            error_msg: Assertion message if multi-column index is not found
-            expected_single_col_index: Optional set of column names for single-column index check
-            single_col_error_msg: Optional assertion message if single-column index is not found
+
+        Returns:
+            MigrationTestResult: Named tuple containing (model, constraints, project_state)
         """
         connection = connections['default']
         suffix = '_combined' if use_single_context else '_split'
@@ -229,32 +228,38 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
             # This simulates combining operations in a single migration file
             with connection.schema_editor(atomic=True) as editor:
                 project_state = migration_a.apply(ProjectState(), editor)
-                migration_b.apply(project_state, editor)
+                project_state = migration_b.apply(project_state, editor)
         else:
             # Split: each migration in its own schema_editor context
             # This simulates two separate migration files
             with connection.schema_editor(atomic=True) as editor:
                 project_state = migration_a.apply(ProjectState(), editor)
             with connection.schema_editor(atomic=True) as editor:
-                migration_b.apply(project_state, editor)
+                project_state = migration_b.apply(project_state, editor)
 
-        # Verify multi-column index exists
+        # Get the model and constraints for assertions
         model = project_state.apps.get_model('testapp', model_name)
         constraints = get_constraints(table_name=model._meta.db_table)
-        
+
+        return MigrationTestResult(model, constraints, project_state)
+
+    def _assert_index_exists(self, constraints, expected_columns, error_msg):
+        """
+        Assert that an index with exactly the expected columns exists.
+
+        Args:
+            constraints: Dictionary of constraints from get_constraints()
+            expected_columns: Set of column names that should be in the index
+            error_msg: Message to display if assertion fails
+        """
         found = any(
-            set(info['columns']) == expected_index_columns and info['index']
+            set(info['columns']) == expected_columns and info['index']
             for info in constraints.values()
         )
-        assert found, error_msg
-        
-        # Optional: verify single-column index exists (for db_index=True tests)
-        if expected_single_col_index is not None:
-            single_col_found = any(
-                set(info['columns']) == expected_single_col_index and info['index']
-                for info in constraints.values()
-            )
-            assert single_col_found, single_col_error_msg
+        self.assertTrue(found, error_msg)
+
+    def _get_context_description(self, use_single_context: bool) -> str:
+        return "combined context" if use_single_context else "split contexts"
 
     def test_multi_column_index_retained_after_type_change(self):
         """
@@ -263,11 +268,11 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
         Runs with both split and combined migration contexts.
         """
         for use_single_context in [False, True]:
-            context_desc = "combined context" if use_single_context else "split contexts"
+
             with self.subTest(single_context=use_single_context):
                 suffix = '_combined' if use_single_context else '_split'
                 model_name = f'TestMCIdxType{suffix}'
-                
+
                 class TestMigrationA(migrations.Migration):
                     initial = True
 
@@ -295,16 +300,20 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
                         ),
                     ]
 
-                self._run_migration_test(
+                result = self._run_migration_test(
                     MigrationA=TestMigrationA,
                     MigrationB=TestMigrationB,
                     migration_name_prefix='test_mc_type',
                     model_name=model_name,
-                    expected_index_columns={'a', 'b'},
                     use_single_context=use_single_context,
+                )
+
+                self._assert_index_exists(
+                    result.constraints,
+                    expected_columns={'a', 'b'},
                     error_msg=(
                         f"Multi-column index on ('a', 'b') was not recreated after field type change "
-                        f"({context_desc}). Expected index to be restored after ALTER COLUMN operation."
+                        f"({self._get_context_description(use_single_context)}). Expected index to be restored after ALTER COLUMN operation."
                     ),
                 )
 
@@ -315,11 +324,11 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
         Runs with both split and combined migration contexts.
         """
         for use_single_context in [False, True]:
-            context_desc = "combined context" if use_single_context else "split contexts"
+
             with self.subTest(single_context=use_single_context):
                 suffix = '_combined' if use_single_context else '_split'
                 model_name = f'TestMCIdxNull{suffix}'
-                
+
                 class TestMigrationA(migrations.Migration):
                     initial = True
 
@@ -347,16 +356,20 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
                         ),
                     ]
 
-                self._run_migration_test(
+                result = self._run_migration_test(
                     MigrationA=TestMigrationA,
                     MigrationB=TestMigrationB,
                     migration_name_prefix='test_mc_null',
                     model_name=model_name,
-                    expected_index_columns={'a', 'b'},
                     use_single_context=use_single_context,
+                )
+
+                self._assert_index_exists(
+                    result.constraints,
+                    expected_columns={'a', 'b'},
                     error_msg=(
                         f"Multi-column index on ('a', 'b') was not recreated after nullability change "
-                        f"({context_desc}). Expected index to be restored after ALTER COLUMN NULL operation."
+                        f"({self._get_context_description(use_single_context)}). Expected index to be restored after ALTER COLUMN NULL operation."
                     ),
                 )
 
@@ -367,11 +380,11 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
         Runs with both split and combined migration contexts.
         """
         for use_single_context in [False, True]:
-            context_desc = "combined context" if use_single_context else "split contexts"
+
             with self.subTest(single_context=use_single_context):
                 suffix = '_combined' if use_single_context else '_split'
                 model_name = f'TestMCIdxRename{suffix}'
-                
+
                 class TestMigrationA(migrations.Migration):
                     initial = True
 
@@ -399,16 +412,20 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
                         ),
                     ]
 
-                self._run_migration_test(
+                result = self._run_migration_test(
                     MigrationA=TestMigrationA,
                     MigrationB=TestMigrationB,
                     migration_name_prefix='test_mc_rename',
                     model_name=model_name,
-                    expected_index_columns={'a_renamed', 'b'},
                     use_single_context=use_single_context,
+                )
+
+                self._assert_index_exists(
+                    result.constraints,
+                    expected_columns={'a_renamed', 'b'},
                     error_msg=(
                         f"Multi-column index on ('a_renamed', 'b') was not found after field rename "
-                        f"({context_desc}). Expected index to be updated to reflect the renamed column."
+                        f"({self._get_context_description(use_single_context)}). Expected index to be updated to reflect the renamed column."
                     ),
                 )
 
@@ -419,11 +436,11 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
         Runs with both split and combined migration contexts.
         """
         for use_single_context in [False, True]:
-            context_desc = "combined context" if use_single_context else "split contexts"
+
             with self.subTest(single_context=use_single_context):
                 suffix = '_combined' if use_single_context else '_split'
                 model_name = f'TestMCIdxBoth{suffix}'
-                
+
                 class TestMigrationA(migrations.Migration):
                     initial = True
 
@@ -456,16 +473,20 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
                         ),
                     ]
 
-                self._run_migration_test(
+                result = self._run_migration_test(
                     MigrationA=TestMigrationA,
                     MigrationB=TestMigrationB,
                     migration_name_prefix='test_mc_both',
                     model_name=model_name,
-                    expected_index_columns={'a', 'b'},
                     use_single_context=use_single_context,
+                )
+
+                self._assert_index_exists(
+                    result.constraints,
+                    expected_columns={'a', 'b'},
                     error_msg=(
                         f"Multi-column index on ('a', 'b') was not recreated after altering both fields "
-                        f"({context_desc}). Expected index to be restored after multiple ALTER COLUMN operations."
+                        f"({self._get_context_description(use_single_context)}). Expected index to be restored after multiple ALTER COLUMN operations."
                     ),
                 )
 
@@ -480,7 +501,7 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
             with self.subTest(single_context=use_single_context):
                 suffix = '_combined' if use_single_context else '_split'
                 model_name = f'TestMCIdx3Col{suffix}'
-                
+
                 class TestMigrationA(migrations.Migration):
                     initial = True
 
@@ -509,16 +530,20 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
                         ),
                     ]
 
-                self._run_migration_test(
+                result = self._run_migration_test(
                     MigrationA=TestMigrationA,
                     MigrationB=TestMigrationB,
                     migration_name_prefix='test_mc_3col',
                     model_name=model_name,
-                    expected_index_columns={'a', 'b', 'c'},
                     use_single_context=use_single_context,
+                )
+
+                self._assert_index_exists(
+                    result.constraints,
+                    expected_columns={'a', 'b', 'c'},
                     error_msg=(
                         f"Three-column index on ('a', 'b', 'c') was not recreated after field alteration "
-                        f"({context_desc}). Expected index to be restored after ALTER COLUMN operation on middle column."
+                        f"({self._get_context_description(use_single_context)}). Expected index to be restored after ALTER COLUMN operation on middle column."
                     ),
                 )
 
@@ -533,7 +558,7 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
             with self.subTest(single_context=use_single_context):
                 suffix = '_combined' if use_single_context else '_split'
                 model_name = f'TestMCIdxDbIdx{suffix}'
-                
+
                 class TestMigrationA(migrations.Migration):
                     initial = True
 
@@ -561,21 +586,31 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
                         ),
                     ]
 
-                self._run_migration_test(
+                result = self._run_migration_test(
                     MigrationA=TestMigrationA,
                     MigrationB=TestMigrationB,
                     migration_name_prefix='test_mc_dbidx',
                     model_name=model_name,
-                    expected_index_columns={'a', 'b'},
                     use_single_context=use_single_context,
+                )
+
+                # Check that multi-column index was recreated
+                self._assert_index_exists(
+                    result.constraints,
+                    expected_columns={'a', 'b'},
                     error_msg=(
                         f"Multi-column index on ('a', 'b') was not recreated after field type change "
-                        f"({context_desc})."
+                        f"({self._get_context_description(use_single_context)})."
                     ),
-                    expected_single_col_index={'a'},
-                    single_col_error_msg=(
+                )
+
+                # Check that single-column index from db_index=True was also recreated
+                self._assert_index_exists(
+                    result.constraints,
+                    expected_columns={'a'},
+                    error_msg=(
                         f"Single-column index on 'a' (from db_index=True) was not recreated "
-                        f"after field type change ({context_desc})."
+                        f"after field type change ({self._get_context_description(use_single_context)})."
                     ),
                 )
 
