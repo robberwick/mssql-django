@@ -634,19 +634,13 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                 self._delete_unique_constraints(model, old_field, new_field, strict)
                 # Drop indexes, SQL Server requires explicit deletion
                 indexes_dropped = self._delete_indexes(model, old_field, new_field)
-                auto_index_names = []
-                for index_from_meta in model._meta.indexes:
-                    auto_index_names.append(self._create_index_name(model._meta.db_table, index_from_meta.fields))
 
                 if (
                     new_field.get_internal_type() not in ("JSONField", "TextField") and
-                    (old_field.db_index or not new_field.db_index) and
-                    new_field.db_index or
-                    ((indexes_dropped and sorted(indexes_dropped) == sorted([index.name for index in model._meta.indexes])) or
-                     (indexes_dropped and sorted(indexes_dropped) == sorted(auto_index_names)))
+                    (old_field.db_index and new_field.db_index) # Changes in the value of db_index are handled elsewhere
                 ):
                     create_index_sql_statement = self._create_index_sql(model, [new_field])
-                    if create_index_sql_statement.__str__() not in [sql.__str__() for sql in self.deferred_sql]:
+                    if str(create_index_sql_statement) not in [str(sql) for sql in self.deferred_sql]:
                         post_actions.append((create_index_sql_statement, ()))
         # Only if we have a default and there is a change from NULL to NOT NULL
         four_way_default_alteration = (
@@ -807,6 +801,8 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                             )
                     break
             index_columns = []
+            indexes_to_restore = []
+
             if old_field.db_index and new_field.db_index:
                 index_columns.append([old_field])
             else:
@@ -819,13 +815,25 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                       columns = [model._meta.get_field(field) for field in fields]
                       if old_field.column in [c.column for c in columns]:
                          index_columns.append(columns)
+            for index in model._meta.indexes:
+                index_fields = [model._meta.get_field(field_name) for field_name in index.fields]
+                index_columns_list = [field.column for field in index_fields]
+                if old_field.column in index_columns_list:
+                    indexes_to_restore.append(index)  # Store the Index object, not field list
             if index_columns:
                 for columns in index_columns:
                     create_index_sql_statement = self._create_index_sql(model, columns)
-                    if (create_index_sql_statement.__str__()
-                            not in [sql.__str__() for sql in self.deferred_sql] + [statement[0].__str__() for statement in post_actions]
+                    if (str(create_index_sql_statement)
+                            not in [str(sql) for sql in self.deferred_sql] + [str(statement[0]) for statement in post_actions]
                             ):
                         self.execute(create_index_sql_statement)
+
+            for index in indexes_to_restore:
+                create_index_sql_statement = index.create_sql(model, self)
+                if create_index_sql_statement and (str(create_index_sql_statement)
+                        not in [str(sql) for sql in self.deferred_sql] + [str(statement[0]) for statement in post_actions]
+                        ):
+                    self.execute(create_index_sql_statement)
 
         # Type alteration on primary key? Then we need to alter the column
         # referring to us.
