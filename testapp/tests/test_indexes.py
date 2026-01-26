@@ -120,7 +120,7 @@ class TestCorrectIndexes(TestCase):
                 expected_index_causes = []
                 if field.db_index:
                     expected_index_causes.append('db_index=True')
-                if VERSION < (5, 1):     
+                if VERSION < (5, 1):
                    for field_names in model_cls._meta.index_together:
                       if field.name in field_names:
                          expected_index_causes.append(f'index_together[{field_names}]')
@@ -184,13 +184,13 @@ class TestIndexesBeingDropped(TestCase):
         except ProgrammingError:
             self.fail("Unique indexes not being dropped")
 
-class TestMultiColumnIndexRetained(TransactionTestCase):
+class TestMetaIndexesRetained(TransactionTestCase):
     """
-    Regression test for multi-column indexes (defined via Meta.indexes) being dropped
+    Regression test for indexes defined via Meta.indexes being dropped
     and not recreated after altering one of the indexed columns.
 
     Tests various schema operations that trigger index drop/recreate logic to ensure
-    multi-column indexes are properly restored.
+    indexes are properly restored.
 
     Each test runs twice:
     - With migrations in split contexts (simulates separate migration files)
@@ -262,9 +262,9 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
     def _get_context_description(self, use_single_context: bool) -> str:
         return "combined context" if use_single_context else "split contexts"
 
-    def test_multi_column_index_retained_after_type_change(self):
+    def test_index_from_meta_indexes_retained_after_type_change(self):
         """
-        Test that multi-column indexes are retained when altering field type (max_length change).
+        Test that indexes defined in _meta.indexes are retained when altering field type (max_length change).
         This exercises the type change code path in _alter_field.
         Runs with both split and combined migration contexts.
         """
@@ -272,7 +272,7 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
 
             with self.subTest(single_context=use_single_context):
                 suffix = '_combined' if use_single_context else '_split'
-                model_name = f'TestMCIdxType{suffix}'
+                model_name = f'TestMetaIdxType{suffix}'
 
                 class TestMigrationA(migrations.Migration):
                     initial = True
@@ -313,14 +313,14 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
                     result.constraints,
                     expected_columns={'a', 'b'},
                     error_msg=(
-                        f"Multi-column index on ('a', 'b') was not recreated after field type change "
+                        f"Index on ('a', 'b') from _meta.indexes was not recreated after field type change "
                         f"({self._get_context_description(use_single_context)}). Expected index to be restored after ALTER COLUMN operation."
                     ),
                 )
 
-    def test_multi_column_index_retained_after_nullability_change(self):
+    def test_index_from_meta_indexes_retained_after_nullability_change(self):
         """
-        Test that multi-column indexes are retained when changing field nullability.
+        Test that indexes defined in _meta.indexes are retained when changing field nullability.
         This exercises the nullability change code path in _alter_field.
         Runs with both split and combined migration contexts.
         """
@@ -328,7 +328,7 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
 
             with self.subTest(single_context=use_single_context):
                 suffix = '_combined' if use_single_context else '_split'
-                model_name = f'TestMCIdxNull{suffix}'
+                model_name = f'TestMetaIdxNull{suffix}'
 
                 class TestMigrationA(migrations.Migration):
                     initial = True
@@ -369,14 +369,14 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
                     result.constraints,
                     expected_columns={'a', 'b'},
                     error_msg=(
-                        f"Multi-column index on ('a', 'b') was not recreated after nullability change "
+                        f"Index on ('a', 'b') from _meta.indexes was not recreated after nullability change "
                         f"({self._get_context_description(use_single_context)}). Expected index to be restored after ALTER COLUMN NULL operation."
                     ),
                 )
 
-    def test_multi_column_index_retained_after_field_rename(self):
+    def test_index_from_meta_indexes_retained_after_field_rename(self):
         """
-        Test that multi-column indexes are retained and updated when renaming a field.
+        Test that indexes defined in _meta.indexes are retained and updated when renaming a field.
         The index should exist on the renamed column.
         Runs with both split and combined migration contexts.
         """
@@ -384,7 +384,7 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
 
             with self.subTest(single_context=use_single_context):
                 suffix = '_combined' if use_single_context else '_split'
-                model_name = f'TestMCIdxRename{suffix}'
+                model_name = f'TestMetaIdxRename{suffix}'
 
                 class TestMigrationA(migrations.Migration):
                     initial = True
@@ -425,14 +425,14 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
                     result.constraints,
                     expected_columns={'a_renamed', 'b'},
                     error_msg=(
-                        f"Multi-column index on ('a_renamed', 'b') was not found after field rename "
+                        f"Index on ('a_renamed', 'b') from _meta.indexes was not found after field rename "
                         f"({self._get_context_description(use_single_context)}). Expected index to be updated to reflect the renamed column."
                     ),
                 )
 
-    def test_multi_column_index_retained_after_altering_both_fields(self):
+    def test_index_from_meta_indexes_retained_after_altering_both_fields(self):
         """
-        Test that multi-column indexes are retained when altering multiple fields in the index.
+        Test that indexes defined in _meta.indexes are retained when altering multiple fields in the index.
         This ensures the index is properly restored even when both participating columns are altered.
         Runs with both split and combined migration contexts.
         """
@@ -440,7 +440,7 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
 
             with self.subTest(single_context=use_single_context):
                 suffix = '_combined' if use_single_context else '_split'
-                model_name = f'TestMCIdxBoth{suffix}'
+                model_name = f'TestMetaIdxBoth{suffix}'
 
                 class TestMigrationA(migrations.Migration):
                     initial = True
@@ -486,7 +486,7 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
                     result.constraints,
                     expected_columns={'a', 'b'},
                     error_msg=(
-                        f"Multi-column index on ('a', 'b') was not recreated after altering both fields "
+                        f"Index on ('a', 'b') from _meta.indexes was not recreated after altering both fields "
                         f"({self._get_context_description(use_single_context)}). Expected index to be restored after multiple ALTER COLUMN operations."
                     ),
                 )
@@ -501,7 +501,7 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
             context_desc = "combined context" if use_single_context else "split contexts"
             with self.subTest(single_context=use_single_context):
                 suffix = '_combined' if use_single_context else '_split'
-                model_name = f'TestMCIdx3Col{suffix}'
+                model_name = f'TestMetaIdx3Col{suffix}'
 
                 class TestMigrationA(migrations.Migration):
                     initial = True
@@ -548,17 +548,16 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
                     ),
                 )
 
-    def test_field_with_db_index_and_multi_column_index_retained(self):
+    def test_indexes_retained_for_field_with_db_index_and_meta_indexes(self):
         """
-        Test that both single-column and multi-column indexes are retained when
-        a field has db_index=True and also participates in a multi-column index.
-        Runs with both split and combined migration contexts.
+        Test that when a field has indexes from both db_index=True and _meta.indexes, those
+        indexes are both retained after altering that field.
         """
         for use_single_context in [False, True]:
             context_desc = "combined context" if use_single_context else "split contexts"
             with self.subTest(single_context=use_single_context):
                 suffix = '_combined' if use_single_context else '_split'
-                model_name = f'TestMCIdxDbIdx{suffix}'
+                model_name = f'TestMetaIdxDbIdx{suffix}'
 
                 class TestMigrationA(migrations.Migration):
                     initial = True
@@ -595,29 +594,29 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
                     use_single_context=use_single_context,
                 )
 
-                # Check that multi-column index was recreated
+                # Check that _meta_indexes index was recreated
                 self._assert_index_exists(
                     result.constraints,
                     expected_columns={'a', 'b'},
                     error_msg=(
-                        f"Multi-column index on ('a', 'b') was not recreated after field type change "
+                        f"Index on ('a', 'b') from _meta.indexes was not recreated after field type change "
                         f"({self._get_context_description(use_single_context)})."
                     ),
                 )
 
-                # Check that single-column index from db_index=True was also recreated
+                # Check that index from db_index=True was also recreated
                 self._assert_index_exists(
                     result.constraints,
                     expected_columns={'a'},
                     error_msg=(
-                        f"Single-column index on 'a' (from db_index=True) was not recreated "
+                        "Index on 'a' from db_index=True was not recreated "
                         f"after field type change ({self._get_context_description(use_single_context)})."
                     ),
                 )
 
-    def test_multi_column_index_retained_after_type_and_nullability_change(self):
+    def test_index_from_meta_indexes_retained_after_type_and_nullability_change(self):
         """
-        Test that multi-column indexes are retained when BOTH type and nullability change simultaneously.
+        Test that indexes defined in _meta.indexes are retained when BOTH type and nullability change simultaneously.
         This exercises both code paths in _alter_field (type change AND nullability change).
         The index should only be dropped once and recreated once (tests deduplication logic).
         Runs with both split and combined migration contexts.
@@ -626,7 +625,7 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
 
             with self.subTest(single_context=use_single_context):
                 suffix = '_combined' if use_single_context else '_split'
-                model_name = f'TestMCIdxTypeNull{suffix}'
+                model_name = f'TestMetaIdxTypeNull{suffix}'
 
                 class TestMigrationA(migrations.Migration):
                     initial = True
@@ -667,24 +666,24 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
                     result.constraints,
                     expected_columns={'a', 'b'},
                     error_msg=(
-                        f"Multi-column index on ('a', 'b') was not recreated after simultaneous type and nullability change "
+                        f"Index on ('a', 'b') from _meta.indexes was not recreated after simultaneous type and nullability change "
                         f"({self._get_context_description(use_single_context)}). "
                         f"Expected index to be restored after ALTER COLUMN operation changing both max_length and nullability."
                     ),
                 )
 
-    def test_multi_column_index_retained_with_unique_together(self):
+    def test_indexes_from_meta_indexes_retained_with_unique_together(self):
         """
-        Test that multi-column indexes coexist properly with unique_together constraints.
-        Tests the case where a model has both unique_together and a regular multi-column index
-        on overlapping columns. The multi-column index should be retained after field alteration.
+        Test that indexes defined in _meta.indexes coexist properly with unique_together constraints.
+        Tests the case where a model has overlapping columns participating in both unique_together and
+        indexes defined in _meta.indexes. The index defined in _meta.indexes should be retained after field alteration.
         Runs with both split and combined migration contexts.
         """
         for use_single_context in [False, True]:
 
             with self.subTest(single_context=use_single_context):
                 suffix = '_combined' if use_single_context else '_split'
-                model_name = f'TestMCIdxUniqTogether{suffix}'
+                model_name = f'TestMetaIdxUniqTogether{suffix}'
 
                 class TestMigrationA(migrations.Migration):
                     initial = True
@@ -726,12 +725,12 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
                     use_single_context=use_single_context,
                 )
 
-                # Check that the multi-column index (a, c) was recreated
+                # Check that the index (a, c) from _meta.indexes was recreated
                 self._assert_index_exists(
                     result.constraints,
                     expected_columns={'a', 'c'},
                     error_msg=(
-                        f"Multi-column index on ('a', 'c') was not recreated after field alteration "
+                        f"Index on ('a', 'c') from _meta.indexes was not recreated after field alteration "
                         f"({self._get_context_description(use_single_context)}). "
                         f"Expected index to coexist with unique_together constraint on ('a', 'b')."
                     ),
@@ -748,10 +747,10 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
                     f"({self._get_context_description(use_single_context)})."
                 )
 
-    def test_multi_column_index_retained_after_fk_alteration(self):
+    def test_index_from_meta_indexes_retained_after_fk_alteration(self):
         """
-        Test that multi-column indexes containing ForeignKey fields are retained after FK alteration.
-        ForeignKey handling in _alter_field is complex, and this ensures that multi-column indexes
+        Test that indexes defined in _meta.indexes containing ForeignKey fields are retained after FK alteration.
+        ForeignKey handling in _alter_field is complex, and this ensures that indexes defined in _meta.indexes
         involving FK fields are properly restored.
         Runs with both split and combined migration contexts.
         """
@@ -759,8 +758,8 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
 
             with self.subTest(single_context=use_single_context):
                 suffix = '_combined' if use_single_context else '_split'
-                ref_model_name = f'TestMCIdxFKRef{suffix}'
-                model_name = f'TestMCIdxFK{suffix}'
+                ref_model_name = f'TestMetaIdxFKRef{suffix}'
+                model_name = f'TestMetaIdxFK{suffix}'
 
                 class TestMigrationA(migrations.Migration):
                     initial = True
@@ -815,16 +814,16 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
                     result.constraints,
                     expected_columns={'fk_field_id', 'other_field'},
                     error_msg=(
-                        f"Multi-column index on ('fk_field', 'other_field') was not recreated after FK alteration "
+                        f"Index on ('fk_field', 'other_field') from _meta.indexes was not recreated after FK alteration "
                         f"({self._get_context_description(use_single_context)}). "
                         f"Expected index to be restored after changing FK from CASCADE to SET_NULL with null=True."
                     ),
                 )
 
-    def test_multiple_multi_column_indexes_retained(self):
+    def test_multiple_index_from_meta_indexes_retained(self):
         """
-        Test that ALL multi-column indexes are retained when a field participates in multiple indexes.
-        A field can be part of multiple different multi-column indexes, and all should be restored
+        Test that ALL indexes defined in _meta.indexes are retained when a field participates in multiple indexes.
+        A field can be part of multiple different indexes defined in _meta.indexes, and all should be restored
         after altering that field.
         Runs with both split and combined migration contexts.
         """
@@ -832,7 +831,7 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
 
             with self.subTest(single_context=use_single_context):
                 suffix = '_combined' if use_single_context else '_split'
-                model_name = f'TestMCIdxMulti{suffix}'
+                model_name = f'TestMetaMulti{suffix}'
 
                 class TestMigrationA(migrations.Migration):
                     initial = True
@@ -874,12 +873,12 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
                     use_single_context=use_single_context,
                 )
 
-                # Check that both multi-column indexes were recreated
+                # Check that both indexes defined in _meta.indexes were recreated
                 self._assert_index_exists(
                     result.constraints,
                     expected_columns={'a', 'b'},
                     error_msg=(
-                        f"Multi-column index on ('a', 'b') was not recreated after field alteration "
+                        f"Index on ('a', 'b') from _meta.indexes was not recreated after field alteration "
                         f"({self._get_context_description(use_single_context)}). "
                         f"Expected BOTH indexes containing field 'a' to be restored."
                     ),
@@ -889,15 +888,15 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
                     result.constraints,
                     expected_columns={'a', 'c'},
                     error_msg=(
-                        f"Multi-column index on ('a', 'c') was not recreated after field alteration "
+                        f"Index on ('a', 'c') from _meta.indexes was not recreated after field alteration "
                         f"({self._get_context_description(use_single_context)}). "
                         f"Expected BOTH indexes containing field 'a' to be restored."
                     ),
                 )
 
-    def test_multi_column_index_retained_after_nullability_change_to_not_null(self):
+    def test_index_from_meta_indexes_retained_after_nullability_change_to_not_null(self):
         """
-        Test that multi-column indexes are retained when changing field from NULL to NOT NULL.
+        Test that indexes defined in _meta.indexes are retained when changing field from NULL to NOT NULL.
         This is the reverse direction of the existing nullability test and exercises the
         four-way default alteration path in _alter_field (requires a default value).
         Runs with both split and combined migration contexts.
@@ -906,7 +905,7 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
 
             with self.subTest(single_context=use_single_context):
                 suffix = '_combined' if use_single_context else '_split'
-                model_name = f'TestMCIdxNotNull{suffix}'
+                model_name = f'TestMetaIdxNotNull{suffix}'
 
                 class TestMigrationA(migrations.Migration):
                     initial = True
@@ -947,7 +946,7 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
                     result.constraints,
                     expected_columns={'a', 'b'},
                     error_msg=(
-                        f"Multi-column index on ('a', 'b') was not recreated after nullability change from NULL to NOT NULL "
+                        f"Index on ('a', 'b') from _meta.indexes was not recreated after nullability change from NULL to NOT NULL "
                         f"({self._get_context_description(use_single_context)}). "
                         f"Expected index to be restored after ALTER COLUMN operation with default value handling."
                     ),
@@ -956,22 +955,22 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
     @expectedFailure
     def test_autofield_type_change_preserves_indexes(self):
         """
-        Test that multi-column indexes are retained when changing AutoField to BigAutoField.
+        Test that indexes defined in _meta.indexes are retained when changing AutoField to BigAutoField.
         This exercises the special AutoField/BigAutoField restoration path in _alter_field
         which restores ALL indexes on ALL fields, not just the altered field.
         Runs with both split and combined migration contexts.
-        
+
         KNOWN BUG: This test currently fails because the AutoField/BigAutoField special
-        handling block only restores single-field indexes (db_index=True) and then breaks
-        out of the loop, skipping the multi-column index restoration code that follows.
+        handling block only restores indexes defined via db_index=True and then breaks
+        out of the loop, skipping the subsequent code that restores indexes defined in _meta.indexes.
         The fix would require the AutoField block to also iterate through Meta.indexes
-        or to not break early, allowing the multi-column restoration code to run.
+        or to not break early, allowing the subsequent restoration code to run.
         """
         for use_single_context in [False, True]:
 
             with self.subTest(single_context=use_single_context):
                 suffix = '_combined' if use_single_context else '_split'
-                model_name = f'TestMCIdxAutoField{suffix}'
+                model_name = f'TestMetaIdxAutoField{suffix}'
 
                 class TestMigrationA(migrations.Migration):
                     initial = True
@@ -1012,7 +1011,7 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
                     result.constraints,
                     expected_columns={'a', 'b'},
                     error_msg=(
-                        f"Multi-column index on ('a', 'b') was not recreated after AutoField to BigAutoField change "
+                        f"Index on ('a', 'b') from _meta.indexes was not recreated after AutoField to BigAutoField change "
                         f"({self._get_context_description(use_single_context)}). "
                         f"Expected index to be restored via AutoField/BigAutoField special restoration path."
                     ),
@@ -1020,15 +1019,15 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
 
     def test_pk_type_change_preserves_indexes(self):
         """
-        Test that multi-column indexes are retained when changing primary key type.
-        This tests the primary key restoration path alongside multi-column index restoration.
+        Test that indexes defined in _meta.indexes are retained when changing primary key type.
+        This tests the primary key restoration path alongside the restoration of indexes from _meta.indexes.
         Runs with both split and combined migration contexts.
         """
         for use_single_context in [False, True]:
 
             with self.subTest(single_context=use_single_context):
                 suffix = '_combined' if use_single_context else '_split'
-                model_name = f'TestMCIdxPK{suffix}'
+                model_name = f'TestMetaIdxPK{suffix}'
 
                 class TestMigrationA(migrations.Migration):
                     initial = True
@@ -1075,12 +1074,12 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
                     f"Primary key was not restored ({self._get_context_description(use_single_context)})."
                 )
 
-                # Verify multi-column index including PK column was restored
+                # Verify index from _meta.indexes including PK column was restored
                 self._assert_index_exists(
                     result.constraints,
                     expected_columns={'id', 'a'},
                     error_msg=(
-                        f"Multi-column index on ('id', 'a') was not recreated after PK type change "
+                        f"Index on ('id', 'a') from _meta.indexes was not recreated after PK type change "
                         f"({self._get_context_description(use_single_context)}). "
                         f"Expected index containing PK column to be restored."
                     ),
@@ -1090,16 +1089,16 @@ class TestMultiColumnIndexRetained(TransactionTestCase):
     def test_index_together_retained_after_type_change(self):
         """
         Test that index_together indexes are retained when altering a field type.
-        
+
         IMPORTANT: This test documents the known limitation that index_together is only
         restored when the field does NOT have db_index=True. If a field has both
-        db_index=True AND is in index_together, only the single-field index is restored
+        db_index=True AND is in index_together, only the index from db_index=True is restored
         through the standard restoration path. This is intentional behavior for the
         deprecated index_together API (removed in Django 5.1+).
-        
+
         This test uses a field WITHOUT db_index=True to verify the index_together
         restoration works in that scenario.
-        
+
         Runs with both split and combined migration contexts.
         """
         for use_single_context in [False, True]:
