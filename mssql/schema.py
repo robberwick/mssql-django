@@ -412,77 +412,39 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         # OVERVIEW:
         # SQL Server requires explicit DROP and RESTORE of indexes/constraints when
         # altering column types or nullability. This method handles alterations in
-        # four sections:
+        # four phases:
         #
-        # PREREQUISITES: Validation and constraint/index operations before main phases
-        #   - AutoField conversion validation (not supported)
-        #   - FK constraint drops (restored at end of method, separate from RESTORE PHASE)
-        #   - Unique constraint removal (permanent when unique changed to False)
-        #   - Incoming FK constraint drops (when PK/unique type changing)
-        #   - AutoField/BigAutoField: Drops ALL model indexes (restored in RESTORE PHASE)
-        #   - db_index removal (permanent - user disabled db_index)
-        #   - Check constraint changes
-        #   - Column rename handling (separate logic with immediate restore)
+        # CONSTRAINT AND SPECIAL CASE HANDLING
         #
-        # PHASE 1: DROP PHASE
-        #   - Indexes and constraints that depend on the column being altered must
-        #     be dropped before the ALTER COLUMN statement can execute.
-        #   - Two code paths trigger drops:
-        #     a) TYPE CHANGE PATH: When column type changes (or db_comment in Django 4.2+)
-        #     b) NULLABILITY CHANGE PATH: When NULL/NOT NULL constraint changes
-        #   - Both paths drop: unique constraints, all indexes containing the field
-        #   - See inline comments at each drop location below for details.
+        # COLUMN ALTER PREPARATION
         #
-        # PHASE 2: ALTER PHASE
-        #   - The actual ALTER COLUMN statements execute
-        #   - Column type changes, nullability changes, defaults, etc.
-        #   - Special handling for four_way_default_alteration (NULL→NOT NULL with default)
+        # COLUMN ALTERATION
         #
-        # PHASE 3: RESTORE PHASE
-        #   - Indexes and constraints are recreated after column alterations complete
-        #   - Restoration uses two strategies:
-        #     a) IMMEDIATE execution via self.execute() - for type/nullability restoration
-        #     b) DEFERRED execution via post_actions - for single-field indexes in nullability path
-        #   - Deduplication logic prevents double-creation when both paths trigger
-        #   - See "RESTORE PHASE" section below (search for it) for full details
+        # COLUMN ALTERATION CLEANUP
         #
-        # WHAT GETS RESTORED:
-        #   - Single-field indexes: field.db_index=True
-        #   - Multi-column indexes: Meta.indexes (preserves explicit names)
-        #   - index_together: Django < 5.1 only (deprecated, removed in 5.1+)
-        #   - unique_together: As filtered unique indexes (ANSI NULL behavior)
-        #   - Primary keys: Special handling with _pk suffix
-        #   - AutoField/BigAutoField: All single-field indexes across entire model
+        #
         #
         # KNOWN BUGS/LIMITATIONS:
         #   1. AutoField Bug: AutoField special handling restores db_index fields but
-        #      then breaks early, skipping Meta.indexes restoration. This means multi-
-        #      column indexes containing an AutoField/BigAutoField are NOT restored.
+        #      then breaks early, skipping Meta.indexes restoration. This means indexes
+        #      defined in _meta.indexes containing an AutoField/BigAutoField are NOT restored.
         #      Test: test_autofield_type_change_preserves_indexes (marked @expectedFailure)
         #
         #   2. index_together Limitation: Only restored when field does NOT have
         #      db_index=True (it's in an else block). If a field has both db_index=True
-        #      AND is in index_together, only the single-field index is restored.
+        #      AND is in index_together, only the db_index=True index is restored.
         #      Note: index_together is deprecated and removed in Django 5.1+.
         #
         # DEDUPLICATION:
         #   - When both type AND nullability change, both DROP paths execute
         #   - Without dedup, indexes would be dropped twice and restored twice
         #   - Dedup checks against: deferred_sql (Django's queue) and post_actions (our queue)
-        #   - See inline comments in RESTORE PHASE for implementation details
+        #   - See inline comments in COLUMN ALTER CLEANUP for implementation details
         #
-        # SPECIAL CASES:
-        #   - Column rename: Handled separately in dedicated block, not via DROP/RESTORE
-        #   - ForeignKey: FK constraints handled separately; indexes restored here
-        #   - db_comment with 'fk_on_delete_keep_index': See TestKeepIndexWithDbcomment
         # ============================================================================
 
         # ============================================================================
-        # PREREQUISITES: Validation & Constraint/Index Operations
-        # ============================================================================
-        # These operations handle scenarios that must occur BEFORE the main DROP/ALTER/
-        # RESTORE phases. Some drops here are PERMANENT (field definition changed),
-        # others are TEMPORARY (needed for ALTER to succeed, then restored).
+        # CONSTRAINT AND SPECIAL CASE HANDLING
         # ============================================================================
 
         # the backend doesn't support altering a column to/from AutoField as
@@ -648,13 +610,17 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                 if isinstance(sql, DjStatement):
                     sql.rename_column_references(model._meta.db_table, old_field.column, new_field.column)
 
+        # ===============================================================================
+        # COLUMN ALTER PREPARATION
+        # ===============================================================================
+
         # Next, start accumulating actions to do
         actions = []
         null_actions = []
         post_actions = []
 
         # ================================================================================
-        # DROP PHASE: TYPE CHANGE PATH
+        # COLUMN ALTER PREPARATION: TYPE CHANGE PATH
         # ================================================================================
         # Triggers when: Column type changes (or db_comment changes in Django 4.2+)
         # Drops: Unique constraints + all indexes containing this field
@@ -662,14 +628,6 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         # SQL Server requires indexes/constraints to be dropped before ALTER COLUMN
         # can change the column's data type. This path drops both unique constraints
         # and all indexes that include the altered field.
-        #
-        # NOTE: The return value from _delete_indexes() is currently DISCARDED here.
-        # This means restoration in the RESTORE PHASE (below) uses a conservative
-        # approach: it restores ALL multi-column indexes containing this field,
-        # not just those confirmed as dropped.
-        # TODO: Capture return value to match nullability path's precise restoration.
-        #
-        # Restored in: RESTORE PHASE section below (search for "RESTORE PHASE")
         # ================================================================================
 
         if old_type != new_type or (django_version >= (4, 2) and
@@ -726,7 +684,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             actions.append(self._alter_column_default_sql(model, old_field, new_field))
 
         # ================================================================================
-        # DROP PHASE: NULLABILITY CHANGE PATH
+        # COLUMN ALTER PREPARATION: NULLABILITY CHANGE PATH
         # ================================================================================
         # Triggers when: Column nullability changes (NULL ↔ NOT NULL)
         # Drops: Unique constraints + all indexes containing this field
@@ -734,18 +692,6 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         #
         # SQL Server requires indexes/constraints to be dropped before ALTER COLUMN
         # can change the column's NULL/NOT NULL constraint.
-        #
-        # Unlike the TYPE CHANGE PATH above, this path CAPTURES the list of dropped
-        # index names. Single-field indexes are queued for restoration in post_actions
-        # (deferred execution). Multi-column indexes are restored in the RESTORE PHASE
-        # below (immediate execution).
-        #
-        # Special case: If four_way_default_alteration is True (NULL→NOT NULL with
-        # default), the null_actions are delayed and executed later in this method.
-        #
-        # Restored in:
-        #   - Single-field indexes: post_actions queue (executed near end of method)
-        #   - Multi-column indexes: RESTORE PHASE section below
         # ================================================================================
 
         if old_field.null != new_field.null:
@@ -770,6 +716,12 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                     # other direction.
                     if str(create_index_sql_statement) not in [str(sql) for sql in self.deferred_sql]:
                         post_actions.append((create_index_sql_statement, ()))
+
+
+        # ================================================================================
+        # COLUMN ALTERATION
+        # ================================================================================
+
         # Only if we have a default and there is a change from NULL to NOT NULL
         four_way_default_alteration = (
             (new_field.has_default() or (django_version >= (5,0) and new_field.db_default is not NOT_PROVIDED)) and
@@ -853,29 +805,19 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             self.execute(self._create_index_sql(model, [new_field]))
 
         # ================================================================================
-        # RESTORE PHASE: Index/Constraint Restoration
+        # COLUMN ALTER CLEANUP
         # ================================================================================
-        # This section restores indexes/constraints that were dropped in the DROP PHASE
-        # above (TYPE CHANGE PATH and/or NULLABILITY CHANGE PATH).
-        #
         # WHEN THIS RUNS:
         #   - Only if type changed OR nullability changed
         #   - Only if column was NOT renamed (rename is handled separately)
         #
-        # WHAT GETS RESTORED:
-        #   1. Single-field unique constraints
-        #   2. unique_together (as filtered unique indexes for ANSI NULL behavior)
-        #   3. Primary keys
-        #   4. AutoField/BigAutoField special handling (all single-field indexes + unique_together)
-        #   5. Single-field indexes (db_index=True) or index_together
-        #   6. Multi-column indexes from Meta.indexes
-        #
         # EXECUTION MODE:
         #   Uses IMMEDIATE execution via self.execute() for all restorations here.
-        #   (Contrast with nullability path which uses DEFERRED post_actions for single-field indexes)
+        #   Note that we can do this immediately because the field alterations have been done,
+        #   so there is no need to defer any more.
         #
         # DEDUPLICATION:
-        #   When both type AND nullability change, both DROP paths execute, dropping indexes twice.
+        #   When both type AND nullability change, both DROP paths execute
         #   To prevent double restoration, each index creation checks against:
         #     - deferred_sql: Django's queue of deferred SQL statements
         #     - post_actions: Single-field indexes queued by NULLABILITY CHANGE PATH
@@ -887,7 +829,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             old_field.column == new_field.column  # column rename is handled separately above
         ):
             # --------------------------------------------------------------------------------
-            # RESTORE: Single-field unique constraints
+            # Single-field unique constraints
             # --------------------------------------------------------------------------------
             # If the field had unique=True and still does, recreate the constraint.
             # Note: Nullable unique constraints use filtered indexes (ANSI NULL behavior).
@@ -908,7 +850,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                 self._delete_deferred_unique_indexes_for_field(old_field)
             else:
                 # --------------------------------------------------------------------------------
-                # RESTORE: unique_together constraints
+                # unique_together constraints
                 # --------------------------------------------------------------------------------
                 # If the field is NOT unique itself but IS part of unique_together,
                 # restore those multi-field unique constraints as filtered indexes.
@@ -927,9 +869,9 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                         if old_field.column in columns:
                             condition = ' AND '.join(["[%s] IS NOT NULL" % col for col in columns])
                             self.execute(self._create_unique_sql(model, columns, condition=condition))
-            
+
             # --------------------------------------------------------------------------------
-            # RESTORE: Primary keys
+            # Primary keys
             # --------------------------------------------------------------------------------
             # If the field was and still is a primary key, recreate the PK constraint.
             # --------------------------------------------------------------------------------
@@ -943,9 +885,9 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                         "columns": self.quote_name(new_field.column),
                     }
                 )
-            
+
             # --------------------------------------------------------------------------------
-            # RESTORE: AutoField/BigAutoField special handling - unique_together
+            # AutoField/BigAutoField special handling - unique_together
             # --------------------------------------------------------------------------------
             # When altering an AutoField or BigAutoField, restore ALL unique_together
             # constraints across the entire model (not just those containing this field).
@@ -970,14 +912,13 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                     break
 
             # --------------------------------------------------------------------------------
-            # RESTORE: AutoField/BigAutoField special handling - single-field indexes
+            # AutoField/BigAutoField special handling - single-field indexes
             # --------------------------------------------------------------------------------
             # When altering an AutoField or BigAutoField, restore ALL single-field indexes
             # (db_index=True) across the entire model.
             #
-            # KNOWN BUG: This block breaks early, preventing the multi-column index
-            # restoration code below from running. Multi-column indexes from Meta.indexes
-            # that contain an AutoField/BigAutoField are NOT restored.
+            # KNOWN BUG: This block breaks early, preventing the restoration code below from running.
+            # This means that column indexes from Meta.indexes that contain an AutoField/BigAutoField are NOT restored.
             # Test: test_autofield_type_change_preserves_indexes (marked @expectedFailure)
             # --------------------------------------------------------------------------------
             for t in (AutoField, BigAutoField):
@@ -988,9 +929,9 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                                 self._create_index_sql(model, [field])
                             )
                     break
-            
+
             # --------------------------------------------------------------------------------
-            # RESTORE: Single-field and multi-column indexes
+            # db_index, index_together, and Meta.indexes
             # --------------------------------------------------------------------------------
             # Build lists of indexes to restore, then restore them with deduplication.
             #
@@ -1006,12 +947,12 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             index_columns = []
             indexes_to_restore = []
 
-            # Collect single-field indexes (db_index=True)
+            # Collect db_index=True indexes
             if old_field.db_index and new_field.db_index:
                 index_columns.append([old_field])
             else:
                 # --------------------------------------------------------------------------------
-                # RESTORE: index_together (Django < 5.1 only)
+                # index_together (Django < 5.1 only)
                 # --------------------------------------------------------------------------------
                 # KNOWN LIMITATION: This is in an else block, so it only runs when the field
                 # does NOT have db_index=True. If a field has both db_index=True AND is in
@@ -1028,7 +969,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                          index_columns.append(columns)
 
             # --------------------------------------------------------------------------------
-            # Collect multi-column indexes from Meta.indexes
+            # Collect indexes defined in _meta.indexes
             # --------------------------------------------------------------------------------
             # Collect Index objects (not just field lists) to preserve explicit names
             # and other index attributes when calling index.create_sql().
@@ -1038,7 +979,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                 index_fields = [model._meta.get_field(field_name) for field_name in index.fields]
                 index_columns_list = [field.column for field in index_fields]
 
-                # If the altered field's column is part of this multi-column index, mark for restoration
+                # If the altered field's column is part of this index, mark for restoration
                 if old_field.column in index_columns_list:
                     indexes_to_restore.append(index)  # Store the Index object, not field list
 
