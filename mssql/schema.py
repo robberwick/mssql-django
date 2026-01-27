@@ -950,7 +950,9 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             index_columns = []
             indexes_to_restore = []
 
+            # ------------------------------------------------------------------------------------
             # Collect db_index=True indexes
+            # ------------------------------------------------------------------------------------
             if old_field.db_index and new_field.db_index:
                 index_columns.append([old_field])
             else:
