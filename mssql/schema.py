@@ -706,21 +706,6 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                 # Drop indexes, SQL Server requires explicit deletion
                 indexes_dropped = self._delete_indexes(model, old_field, new_field)
 
-                # Queue single-field index restoration to post_actions (deferred execution)
-                #  NOTE: not sure whether this is needed, or whether it
-                # is sufficient to remove all indexes above and then restore those that should remain
-                if (
-                    new_field.get_internal_type() not in ("JSONField", "TextField") and
-                    (old_field.db_index and new_field.db_index) # Changes in the value of db_index are handled elsewhere
-                ):
-                    create_index_sql_statement = self._create_index_sql(model, [new_field])
-                    # Dedup: Check against deferred_sql to avoid duplicate index creation.
-                    # Note: Final index restoration will check against post_actions to handle deduplication from the
-                    # other direction.
-                    if str(create_index_sql_statement) not in [str(sql) for sql in self.deferred_sql]:
-                        post_actions.append((create_index_sql_statement, ()))
-
-
         # ================================================================================
         # COLUMN ALTERATION
         # ================================================================================
