@@ -232,7 +232,8 @@ class TestMetaIndexesRetained(TransactionTestCase):
                 project_state = migration_b.apply(project_state, editor)
         else:
             # Split: each migration in its own schema_editor context
-            # This simulates two separate migration files
+            # This simulates two separate migration files in order that the contents of the first migration
+            # are fully committed, and `deferred_sql` has had a chance to run before starting the second migration
             with conn.schema_editor(atomic=True) as editor:
                 project_state = migration_a.apply(ProjectState(), editor)
             with conn.schema_editor(atomic=True) as editor:
