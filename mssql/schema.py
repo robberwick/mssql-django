@@ -974,21 +974,6 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                          index_columns.append(columns)
 
             # --------------------------------------------------------------------------------
-            # Collect indexes defined in _meta.indexes
-            # --------------------------------------------------------------------------------
-            # Collect Index objects (not just field lists) to preserve explicit names
-            # and other index attributes when calling index.create_sql().
-            # --------------------------------------------------------------------------------
-            for index in model._meta.indexes:
-                # Get the field objects for this index
-                index_fields = [model._meta.get_field(field_name) for field_name in index.fields]
-                index_columns_list = [field.column for field in index_fields]
-
-                # If the altered field's column is part of this index, mark for restoration
-                if old_field.column in index_columns_list:
-                    indexes_to_restore.append(index)  # Store the Index object, not field list
-
-            # --------------------------------------------------------------------------------
             # Execute restoration: db_index and index_together
             # --------------------------------------------------------------------------------
             # Immediate execution via self.execute() (column changes already applied).
@@ -1002,6 +987,21 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                             not in [str(sql) for sql in self.deferred_sql] + [str(statement[0]) for statement in post_actions]
                             ):
                         self.execute(create_index_sql_statement)
+
+            # --------------------------------------------------------------------------------
+            # Collect indexes defined in _meta.indexes
+            # --------------------------------------------------------------------------------
+            # Collect Index objects (not just field lists) to preserve explicit names
+            # and other index attributes when calling index.create_sql().
+            # --------------------------------------------------------------------------------
+            for index in model._meta.indexes:
+                # Get the field objects for this index
+                index_fields = [model._meta.get_field(field_name) for field_name in index.fields]
+                index_columns_list = [field.column for field in index_fields]
+
+                # If the altered field's column is part of this index, mark for restoration
+                if old_field.column in index_columns_list:
+                    indexes_to_restore.append(index)  # Store the Index object, not field list
 
             # --------------------------------------------------------------------------------
             # Execute restoration: Meta.indexes
