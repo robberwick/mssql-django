@@ -995,7 +995,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             # and attributes.
             #
             # Deduplication: Skip if already in deferred_sql OR post_actions.
-            # This prevents duplicate index creation when BOTH:
+            # This prevents duplicate index creation when either:
             #   1. Type changed (this immediate restoration)
             #   2. Nullability changed (queued restoration in post_actions)
             # Without this check, the same index would be created twice.
