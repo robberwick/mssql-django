@@ -430,6 +430,152 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     ),
                 )
 
+    @expectedFailure
+    def test_index_from_meta_indexes_retained_after_rename_and_type_change(self):
+        """
+        Test that indexes from Meta.indexes are retained when a field is renamed
+        AND has its type changed in the same migration.
+
+        This tests a known bug: the TYPE CHANGE PATH drops indexes, but the
+        RESTORE PHASE is skipped when column is renamed (old_field.column != new_field.column).
+
+        Additionally, _delete_indexes() fails with FieldDoesNotExist because it tries to
+        look up the index field by the old field name, but RenameField has already updated
+        the model state, so the old field name no longer exists.
+
+        Runs with both split and combined migration contexts.
+        """
+        for use_single_context in [False, True]:
+
+            with self.subTest(single_context=use_single_context):
+                suffix = '_combined' if use_single_context else '_split'
+                model_name = f'TestMetaIdxRenameType{suffix}'
+
+                class TestMigrationA(migrations.Migration):
+                    initial = True
+
+                    operations = [
+                        migrations.CreateModel(
+                            name=model_name,
+                            fields=[
+                                ('id', models.AutoField(primary_key=True)),
+                                ('a', models.CharField(max_length=20)),
+                                ('b', models.CharField(max_length=20)),
+                            ],
+                        ),
+                        migrations.AddIndex(
+                            model_name=model_name.lower(),
+                            index=models.Index(fields=['a', 'b'], name=f'idx_rename_type{suffix}'),
+                        ),
+                    ]
+
+                class TestMigrationB(migrations.Migration):
+                    operations = [
+                        # Rename field 'a' to 'a_renamed'
+                        migrations.RenameField(
+                            model_name=model_name.lower(),
+                            old_name='a',
+                            new_name='a_renamed',
+                        ),
+                        # Also change its type (max_length 20 -> 40)
+                        migrations.AlterField(
+                            model_name=model_name.lower(),
+                            name='a_renamed',
+                            field=models.CharField(max_length=40),
+                        ),
+                    ]
+
+                result = self._run_migration_test(
+                    MigrationA=TestMigrationA,
+                    MigrationB=TestMigrationB,
+                    migration_name_prefix='test_mc_rename_type',
+                    model_name=model_name,
+                    use_single_context=use_single_context,
+                )
+
+                self._assert_index_exists(
+                    result.constraints,
+                    expected_columns={'a_renamed', 'b'},
+                    error_msg=(
+                        f"Index on ('a_renamed', 'b') from _meta.indexes was not found after field rename + type change "
+                        f"({self._get_context_description(use_single_context)}). "
+                        f"Expected index to be retained when both rename and type change occur."
+                    ),
+                )
+
+    @expectedFailure
+    def test_index_from_meta_indexes_retained_after_rename_and_nullability_change(self):
+        """
+        Test that indexes from Meta.indexes are retained when a field is renamed
+        AND has its nullability changed in the same migration.
+
+        This tests a known bug: the NULLABILITY CHANGE PATH drops indexes, but the
+        RESTORE PHASE is skipped when column is renamed (old_field.column != new_field.column).
+
+        Additionally, _delete_indexes() fails with FieldDoesNotExist because it tries to
+        look up the index field by the old field name, but RenameField has already updated
+        the model state, so the old field name no longer exists.
+
+        Runs with both split and combined migration contexts.
+        """
+        for use_single_context in [False, True]:
+
+            with self.subTest(single_context=use_single_context):
+                suffix = '_combined' if use_single_context else '_split'
+                model_name = f'TestMetaIdxRenameNull{suffix}'
+
+                class TestMigrationA(migrations.Migration):
+                    initial = True
+
+                    operations = [
+                        migrations.CreateModel(
+                            name=model_name,
+                            fields=[
+                                ('id', models.AutoField(primary_key=True)),
+                                ('a', models.CharField(max_length=20)),
+                                ('b', models.CharField(max_length=20)),
+                            ],
+                        ),
+                        migrations.AddIndex(
+                            model_name=model_name.lower(),
+                            index=models.Index(fields=['a', 'b'], name=f'idx_rename_null{suffix}'),
+                        ),
+                    ]
+
+                class TestMigrationB(migrations.Migration):
+                    operations = [
+                        # Rename field 'a' to 'a_renamed'
+                        migrations.RenameField(
+                            model_name=model_name.lower(),
+                            old_name='a',
+                            new_name='a_renamed',
+                        ),
+                        # Also change its nullability
+                        migrations.AlterField(
+                            model_name=model_name.lower(),
+                            name='a_renamed',
+                            field=models.CharField(max_length=20, null=True),
+                        ),
+                    ]
+
+                result = self._run_migration_test(
+                    MigrationA=TestMigrationA,
+                    MigrationB=TestMigrationB,
+                    migration_name_prefix='test_mc_rename_null',
+                    model_name=model_name,
+                    use_single_context=use_single_context,
+                )
+
+                self._assert_index_exists(
+                    result.constraints,
+                    expected_columns={'a_renamed', 'b'},
+                    error_msg=(
+                        f"Index on ('a_renamed', 'b') from _meta.indexes was not found after field rename + nullability change "
+                        f"({self._get_context_description(use_single_context)}). "
+                        f"Expected index to be retained when both rename and nullability change occur."
+                    ),
+                )
+
     def test_index_from_meta_indexes_retained_after_altering_both_fields(self):
         """
         Test that indexes defined in _meta.indexes are retained when altering multiple fields in the index.
