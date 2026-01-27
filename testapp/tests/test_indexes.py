@@ -1306,24 +1306,8 @@ class TestMetaIndexesRetained(TransactionTestCase):
 
         KNOWN BUG: When a field has BOTH unique=True AND participates in unique_together,
         only the single-field unique constraint is restored after field alteration.
-        The unique_together constraint is NOT restored because in mssql/schema.py lines 838-871,
-        the unique_together restoration is in an 'else' block that only executes when
-        the field does NOT have unique=True.
-
-        The fix would be to change the structure from:
-            if old_field.unique and new_field.unique:
-                # Restore single-field unique
-            else:
-                # Restore unique_together
-
-        To:
-            if old_field.unique and new_field.unique:
-                # Restore single-field unique
-
-            # Restore unique_together (independent of unique=True)
-            for field_names in model._meta.unique_together:
-                if old_field.column in columns:
-                    # Restore unique_together
+        The unique_together constraint is NOT restored because the unique_together restoration is in an
+        'else' block that only executes when the field does NOT have unique=True.
 
         Runs with both split and combined migration contexts.
         """
