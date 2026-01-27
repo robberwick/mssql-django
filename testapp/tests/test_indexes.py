@@ -375,6 +375,123 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     ),
                 )
 
+    def test_db_index_retained_after_nullability_only_change(self):
+        """
+        Test that db_index=True indexes are retained when ONLY nullability changes.
+
+        This tests the case where:
+        - Field has db_index=True
+        - Field nullability changes (null=False → null=True)
+        - Field type does NOT change (same max_length)
+
+        Runs with both split and combined migration contexts.
+        """
+        for use_single_context in [False, True]:
+
+            with self.subTest(single_context=use_single_context):
+                suffix = '_combined' if use_single_context else '_split'
+                model_name = f'TestDbIndexNullChange{suffix}'
+
+                class TestMigrationA(migrations.Migration):
+                    initial = True
+
+                    operations = [
+                        migrations.CreateModel(
+                            name=model_name,
+                            fields=[
+                                ('id', models.AutoField(primary_key=True)),
+                                ('a', models.CharField(max_length=20, db_index=True)),  # db_index=True, null=False
+                            ],
+                        ),
+                    ]
+
+                class TestMigrationB(migrations.Migration):
+                    operations = [
+                        migrations.AlterField(
+                            model_name=model_name.lower(),
+                            name='a',
+                            field=models.CharField(max_length=20, db_index=True, null=True),  # Same type, different null
+                        ),
+                    ]
+
+                result = self._run_migration_test(
+                    MigrationA=TestMigrationA,
+                    MigrationB=TestMigrationB,
+                    migration_name_prefix='test_dbidx_null',
+                    model_name=model_name,
+                    use_single_context=use_single_context,
+                )
+
+                # Verify db_index=True index was retained
+                # Look for single-column index on 'a'
+                db_index_indexes = [
+                    info for info in result.constraints.values()
+                    if info.get('index') and set(info['columns']) == {'a'}
+                ]
+                self.assertTrue(
+                    len(db_index_indexes) > 0,
+                    f"db_index=True index on 'a' was not retained after nullability-only change "
+                    f"({self._get_context_description(use_single_context)}). "
+                    f"Expected index from db_index=True to be restored after changing null=False to null=True."
+                )
+
+    def test_db_index_retained_after_nullability_change_to_not_null(self):
+        """
+        Test that db_index=True indexes are retained when changing from null=True to null=False.
+
+        This is the reverse direction of test_db_index_retained_after_nullability_only_change
+        and exercises the four-way default alteration path in _alter_field (requires a default value).
+
+        Runs with both split and combined migration contexts.
+        """
+        for use_single_context in [False, True]:
+
+            with self.subTest(single_context=use_single_context):
+                suffix = '_combined' if use_single_context else '_split'
+                model_name = f'TestDbIndexNotNull{suffix}'
+
+                class TestMigrationA(migrations.Migration):
+                    initial = True
+
+                    operations = [
+                        migrations.CreateModel(
+                            name=model_name,
+                            fields=[
+                                ('id', models.AutoField(primary_key=True)),
+                                ('a', models.CharField(max_length=20, db_index=True, null=True)),  # db_index=True, null=True
+                            ],
+                        ),
+                    ]
+
+                class TestMigrationB(migrations.Migration):
+                    operations = [
+                        migrations.AlterField(
+                            model_name=model_name.lower(),
+                            name='a',
+                            field=models.CharField(max_length=20, db_index=True, null=False, default=''),  # null=False requires default
+                        ),
+                    ]
+
+                result = self._run_migration_test(
+                    MigrationA=TestMigrationA,
+                    MigrationB=TestMigrationB,
+                    migration_name_prefix='test_dbidx_notnull',
+                    model_name=model_name,
+                    use_single_context=use_single_context,
+                )
+
+                # Verify db_index=True index was retained
+                db_index_indexes = [
+                    info for info in result.constraints.values()
+                    if info.get('index') and set(info['columns']) == {'a'}
+                ]
+                self.assertTrue(
+                    len(db_index_indexes) > 0,
+                    f"db_index=True index on 'a' was not retained after nullability change from NULL to NOT NULL "
+                    f"({self._get_context_description(use_single_context)}). "
+                    f"Expected index from db_index=True to be restored after four-way default alteration."
+                )
+
     def test_index_from_meta_indexes_retained_after_field_rename(self):
         """
         Test that indexes defined in _meta.indexes are retained and updated when renaming a field.
