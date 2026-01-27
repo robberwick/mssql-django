@@ -1299,6 +1299,100 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     ),
                 )
 
+    @expectedFailure
+    def test_unique_together_retained_when_field_also_has_unique_true(self):
+        """
+        Test that unique_together constraints are retained when a field with unique=True is altered.
+
+        KNOWN BUG: When a field has BOTH unique=True AND participates in unique_together,
+        only the single-field unique constraint is restored after field alteration.
+        The unique_together constraint is NOT restored because in mssql/schema.py lines 838-871,
+        the unique_together restoration is in an 'else' block that only executes when
+        the field does NOT have unique=True.
+
+        The fix would be to change the structure from:
+            if old_field.unique and new_field.unique:
+                # Restore single-field unique
+            else:
+                # Restore unique_together
+
+        To:
+            if old_field.unique and new_field.unique:
+                # Restore single-field unique
+
+            # Restore unique_together (independent of unique=True)
+            for field_names in model._meta.unique_together:
+                if old_field.column in columns:
+                    # Restore unique_together
+
+        Runs with both split and combined migration contexts.
+        """
+        for use_single_context in [False, True]:
+
+            with self.subTest(single_context=use_single_context):
+                suffix = '_combined' if use_single_context else '_split'
+                model_name = f'TestUniqueAndUniqTogether{suffix}'
+
+                class TestMigrationA(migrations.Migration):
+                    initial = True
+
+                    operations = [
+                        migrations.CreateModel(
+                            name=model_name,
+                            fields=[
+                                ('id', models.AutoField(primary_key=True)),
+                                ('a', models.CharField(max_length=20, unique=True)),
+                                ('b', models.CharField(max_length=20)),
+                            ],
+                        ),
+                        migrations.AlterUniqueTogether(
+                            name=model_name.lower(),
+                            unique_together={('a', 'b')},
+                        ),
+                    ]
+
+                class TestMigrationB(migrations.Migration):
+                    operations = [
+                        migrations.AlterField(
+                            model_name=model_name.lower(),
+                            name='a',
+                            field=models.CharField(max_length=40, unique=True),
+                        ),
+                    ]
+
+                result = self._run_migration_test(
+                    MigrationA=TestMigrationA,
+                    MigrationB=TestMigrationB,
+                    migration_name_prefix='test_uniq_uniqtog',
+                    model_name=model_name,
+                    use_single_context=use_single_context,
+                )
+
+                # Check that single-field unique constraint on 'a' was restored
+                single_unique_constraints = [
+                    info for info in result.constraints.values()
+                    if info.get('unique') and set(info['columns']) == {'a'}
+                ]
+                self.assertTrue(
+                    len(single_unique_constraints) > 0,
+                    f"Single-field unique constraint on 'a' was not restored "
+                    f"({self._get_context_description(use_single_context)})."
+                )
+
+                # Check that unique_together constraint on ('a', 'b') was restored
+                # THIS ASSERTION WILL FAIL due to the bug in mssql/schema.py lines 838-871
+                unique_together_constraints = [
+                    info for info in result.constraints.values()
+                    if info.get('unique') and set(info['columns']) == {'a', 'b'}
+                ]
+                self.assertTrue(
+                    len(unique_together_constraints) > 0,
+                    f"unique_together constraint on ('a', 'b') was not restored when field 'a' has unique=True "
+                    f"({self._get_context_description(use_single_context)}). "
+                    f"This is a bug in mssql/schema.py: unique_together restoration is in an 'else' block "
+                    f"that only executes when the field does NOT have unique=True."
+                )
+
 
 
 
