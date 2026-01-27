@@ -199,8 +199,8 @@ class TestMetaIndexesRetained(TransactionTestCase):
 
     def _run_migration_test(
         self,
-        MigrationA: type[Migration],
-        MigrationB: type[Migration],
+        operations_a: list,
+        operations_b: list,
         migration_name_prefix: str,
         model_name: str,
         use_single_context: bool,
@@ -209,11 +209,12 @@ class TestMetaIndexesRetained(TransactionTestCase):
         Helper to run migration tests with either combined or split schema_editor contexts.
 
         Args:
-            MigrationA: Migration class for initial setup (CreateModel + AddIndex)
-            MigrationB: Migration class for the alteration being tested
+            operations_a: List of operations for initial setup (CreateModel + AddIndex)
+            operations_b: List of operations for the alteration being tested
             migration_name_prefix: Prefix for migration names (e.g., 'test_mc_type')
             model_name: Name of the model being tested
-            use_single_context: If True, apply both migrations in one schema_editor context
+            use_single_context: If True, combine both operation lists into one Migration;
+                               If False, create two separate Migrations
 
         Returns:
             MigrationTestResult: Named tuple containing (model, constraints, project_state)
@@ -221,19 +222,32 @@ class TestMetaIndexesRetained(TransactionTestCase):
         # Use django.db.connections to get a fresh connection for TransactionTestCase
         conn = django.db.connections[django.db.DEFAULT_DB_ALIAS]
         suffix = '_combined' if use_single_context else '_split'
-        migration_a = MigrationA(name=f'{migration_name_prefix}{suffix}_a', app_label='testapp')
-        migration_b = MigrationB(name=f'{migration_name_prefix}{suffix}_b', app_label='testapp')
 
         if use_single_context:
-            # Combined: both migrations in one schema_editor context
+            # Combined: Create ONE migration with all operations combined
             # This simulates combining operations in a single migration file
+            class CombinedMigration(migrations.Migration):
+                initial = True
+                operations = operations_a + operations_b
+
+            migration = CombinedMigration(name=f'{migration_name_prefix}{suffix}', app_label='testapp')
+
             with conn.schema_editor(atomic=True) as editor:
-                project_state = migration_a.apply(ProjectState(), editor)
-                project_state = migration_b.apply(project_state, editor)
+                project_state = migration.apply(ProjectState(), editor)
         else:
-            # Split: each migration in its own schema_editor context
-            # This simulates two separate migration files in order that the contents of the first migration
-            # are fully committed, and `deferred_sql` has had a chance to run before starting the second migration
+            # Split: Create TWO separate migrations, each with its own operations
+            # This simulates two separate migration files where the first migration
+            # is fully committed and `deferred_sql` runs before starting the second migration
+            class MigrationA(migrations.Migration):
+                initial = True
+                operations = operations_a
+
+            class MigrationB(migrations.Migration):
+                operations = operations_b
+
+            migration_a = MigrationA(name=f'{migration_name_prefix}{suffix}_a', app_label='testapp')
+            migration_b = MigrationB(name=f'{migration_name_prefix}{suffix}_b', app_label='testapp')
+
             with conn.schema_editor(atomic=True) as editor:
                 project_state = migration_a.apply(ProjectState(), editor)
             with conn.schema_editor(atomic=True) as editor:
@@ -275,36 +289,32 @@ class TestMetaIndexesRetained(TransactionTestCase):
                 suffix = '_combined' if use_single_context else '_split'
                 model_name = f'TestMetaIdxType{suffix}'
 
-                class TestMigrationA(migrations.Migration):
-                    initial = True
+                operations_a = [
+                    migrations.CreateModel(
+                        name=model_name,
+                        fields=[
+                            ('id', models.AutoField(primary_key=True)),
+                            ('a', models.CharField(max_length=20)),
+                            ('b', models.CharField(max_length=20)),
+                        ],
+                    ),
+                    migrations.AddIndex(
+                        model_name=model_name.lower(),
+                        index=models.Index(fields=['a', 'b'], name=f'idx_type{suffix}'),
+                    ),
+                ]
 
-                    operations = [
-                        migrations.CreateModel(
-                            name=model_name,
-                            fields=[
-                                ('id', models.AutoField(primary_key=True)),
-                                ('a', models.CharField(max_length=20)),
-                                ('b', models.CharField(max_length=20)),
-                            ],
-                        ),
-                        migrations.AddIndex(
-                            model_name=model_name.lower(),
-                            index=models.Index(fields=['a', 'b'], name=f'idx_type{suffix}'),
-                        ),
-                    ]
-
-                class TestMigrationB(migrations.Migration):
-                    operations = [
-                        migrations.AlterField(
-                            model_name=model_name.lower(),
-                            name='a',
-                            field=models.CharField(max_length=40),
-                        ),
-                    ]
+                operations_b = [
+                    migrations.AlterField(
+                        model_name=model_name.lower(),
+                        name='a',
+                        field=models.CharField(max_length=40),
+                    ),
+                ]
 
                 result = self._run_migration_test(
-                    MigrationA=TestMigrationA,
-                    MigrationB=TestMigrationB,
+                    operations_a=operations_a,
+                    operations_b=operations_b,
                     migration_name_prefix='test_mc_type',
                     model_name=model_name,
                     use_single_context=use_single_context,
@@ -331,10 +341,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                 suffix = '_combined' if use_single_context else '_split'
                 model_name = f'TestMetaIdxNull{suffix}'
 
-                class TestMigrationA(migrations.Migration):
-                    initial = True
-
-                    operations = [
+                operations_a = [
                         migrations.CreateModel(
                             name=model_name,
                             fields=[
@@ -349,8 +356,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                         ),
                     ]
 
-                class TestMigrationB(migrations.Migration):
-                    operations = [
+                operations_b = [
                         migrations.AlterField(
                             model_name=model_name.lower(),
                             name='b',
@@ -359,8 +365,8 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     ]
 
                 result = self._run_migration_test(
-                    MigrationA=TestMigrationA,
-                    MigrationB=TestMigrationB,
+                    operations_a=operations_a,
+                    operations_b=operations_b,
                     migration_name_prefix='test_mc_null',
                     model_name=model_name,
                     use_single_context=use_single_context,
@@ -392,10 +398,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                 suffix = '_combined' if use_single_context else '_split'
                 model_name = f'TestDbIndexNullChange{suffix}'
 
-                class TestMigrationA(migrations.Migration):
-                    initial = True
-
-                    operations = [
+                operations_a = [
                         migrations.CreateModel(
                             name=model_name,
                             fields=[
@@ -405,8 +408,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                         ),
                     ]
 
-                class TestMigrationB(migrations.Migration):
-                    operations = [
+                operations_b = [
                         migrations.AlterField(
                             model_name=model_name.lower(),
                             name='a',
@@ -415,8 +417,8 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     ]
 
                 result = self._run_migration_test(
-                    MigrationA=TestMigrationA,
-                    MigrationB=TestMigrationB,
+                    operations_a=operations_a,
+                    operations_b=operations_b,
                     migration_name_prefix='test_dbidx_null',
                     model_name=model_name,
                     use_single_context=use_single_context,
@@ -450,10 +452,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                 suffix = '_combined' if use_single_context else '_split'
                 model_name = f'TestDbIndexNotNull{suffix}'
 
-                class TestMigrationA(migrations.Migration):
-                    initial = True
-
-                    operations = [
+                operations_a = [
                         migrations.CreateModel(
                             name=model_name,
                             fields=[
@@ -463,8 +462,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                         ),
                     ]
 
-                class TestMigrationB(migrations.Migration):
-                    operations = [
+                operations_b = [
                         migrations.AlterField(
                             model_name=model_name.lower(),
                             name='a',
@@ -473,8 +471,8 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     ]
 
                 result = self._run_migration_test(
-                    MigrationA=TestMigrationA,
-                    MigrationB=TestMigrationB,
+                    operations_a=operations_a,
+                    operations_b=operations_b,
                     migration_name_prefix='test_dbidx_notnull',
                     model_name=model_name,
                     use_single_context=use_single_context,
@@ -504,10 +502,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                 suffix = '_combined' if use_single_context else '_split'
                 model_name = f'TestMetaIdxRename{suffix}'
 
-                class TestMigrationA(migrations.Migration):
-                    initial = True
-
-                    operations = [
+                operations_a = [
                         migrations.CreateModel(
                             name=model_name,
                             fields=[
@@ -522,8 +517,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                         ),
                     ]
 
-                class TestMigrationB(migrations.Migration):
-                    operations = [
+                operations_b = [
                         migrations.RenameField(
                             model_name=model_name.lower(),
                             old_name='a',
@@ -532,8 +526,8 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     ]
 
                 result = self._run_migration_test(
-                    MigrationA=TestMigrationA,
-                    MigrationB=TestMigrationB,
+                    operations_a=operations_a,
+                    operations_b=operations_b,
                     migration_name_prefix='test_mc_rename',
                     model_name=model_name,
                     use_single_context=use_single_context,
@@ -569,10 +563,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                 suffix = '_combined' if use_single_context else '_split'
                 model_name = f'TestMetaIdxRenameType{suffix}'
 
-                class TestMigrationA(migrations.Migration):
-                    initial = True
-
-                    operations = [
+                operations_a = [
                         migrations.CreateModel(
                             name=model_name,
                             fields=[
@@ -587,8 +578,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                         ),
                     ]
 
-                class TestMigrationB(migrations.Migration):
-                    operations = [
+                operations_b = [
                         # Rename field 'a' to 'a_renamed'
                         migrations.RenameField(
                             model_name=model_name.lower(),
@@ -604,8 +594,8 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     ]
 
                 result = self._run_migration_test(
-                    MigrationA=TestMigrationA,
-                    MigrationB=TestMigrationB,
+                    operations_a=operations_a,
+                    operations_b=operations_b,
                     migration_name_prefix='test_mc_rename_type',
                     model_name=model_name,
                     use_single_context=use_single_context,
@@ -642,10 +632,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                 suffix = '_combined' if use_single_context else '_split'
                 model_name = f'TestMetaIdxRenameNull{suffix}'
 
-                class TestMigrationA(migrations.Migration):
-                    initial = True
-
-                    operations = [
+                operations_a = [
                         migrations.CreateModel(
                             name=model_name,
                             fields=[
@@ -660,8 +647,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                         ),
                     ]
 
-                class TestMigrationB(migrations.Migration):
-                    operations = [
+                operations_b = [
                         # Rename field 'a' to 'a_renamed'
                         migrations.RenameField(
                             model_name=model_name.lower(),
@@ -677,8 +663,8 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     ]
 
                 result = self._run_migration_test(
-                    MigrationA=TestMigrationA,
-                    MigrationB=TestMigrationB,
+                    operations_a=operations_a,
+                    operations_b=operations_b,
                     migration_name_prefix='test_mc_rename_null',
                     model_name=model_name,
                     use_single_context=use_single_context,
@@ -706,10 +692,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                 suffix = '_combined' if use_single_context else '_split'
                 model_name = f'TestMetaIdxBoth{suffix}'
 
-                class TestMigrationA(migrations.Migration):
-                    initial = True
-
-                    operations = [
+                operations_a = [
                         migrations.CreateModel(
                             name=model_name,
                             fields=[
@@ -724,8 +707,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                         ),
                     ]
 
-                class TestMigrationB(migrations.Migration):
-                    operations = [
+                operations_b = [
                         migrations.AlterField(
                             model_name=model_name.lower(),
                             name='a',
@@ -739,8 +721,8 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     ]
 
                 result = self._run_migration_test(
-                    MigrationA=TestMigrationA,
-                    MigrationB=TestMigrationB,
+                    operations_a=operations_a,
+                    operations_b=operations_b,
                     migration_name_prefix='test_mc_both',
                     model_name=model_name,
                     use_single_context=use_single_context,
@@ -767,10 +749,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                 suffix = '_combined' if use_single_context else '_split'
                 model_name = f'TestMetaIdx3Col{suffix}'
 
-                class TestMigrationA(migrations.Migration):
-                    initial = True
-
-                    operations = [
+                operations_a = [
                         migrations.CreateModel(
                             name=model_name,
                             fields=[
@@ -786,8 +765,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                         ),
                     ]
 
-                class TestMigrationB(migrations.Migration):
-                    operations = [
+                operations_b = [
                         migrations.AlterField(
                             model_name=model_name.lower(),
                             name='b',
@@ -796,8 +774,8 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     ]
 
                 result = self._run_migration_test(
-                    MigrationA=TestMigrationA,
-                    MigrationB=TestMigrationB,
+                    operations_a=operations_a,
+                    operations_b=operations_b,
                     migration_name_prefix='test_mc_3col',
                     model_name=model_name,
                     use_single_context=use_single_context,
@@ -823,10 +801,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                 suffix = '_combined' if use_single_context else '_split'
                 model_name = f'TestMetaIdxDbIdx{suffix}'
 
-                class TestMigrationA(migrations.Migration):
-                    initial = True
-
-                    operations = [
+                operations_a = [
                         migrations.CreateModel(
                             name=model_name,
                             fields=[
@@ -841,8 +816,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                         ),
                     ]
 
-                class TestMigrationB(migrations.Migration):
-                    operations = [
+                operations_b = [
                         migrations.AlterField(
                             model_name=model_name.lower(),
                             name='a',
@@ -851,8 +825,8 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     ]
 
                 result = self._run_migration_test(
-                    MigrationA=TestMigrationA,
-                    MigrationB=TestMigrationB,
+                    operations_a=operations_a,
+                    operations_b=operations_b,
                     migration_name_prefix='test_mc_dbidx',
                     model_name=model_name,
                     use_single_context=use_single_context,
@@ -891,10 +865,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                 suffix = '_combined' if use_single_context else '_split'
                 model_name = f'TestMetaIdxTypeNull{suffix}'
 
-                class TestMigrationA(migrations.Migration):
-                    initial = True
-
-                    operations = [
+                operations_a = [
                         migrations.CreateModel(
                             name=model_name,
                             fields=[
@@ -909,8 +880,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                         ),
                     ]
 
-                class TestMigrationB(migrations.Migration):
-                    operations = [
+                operations_b = [
                         migrations.AlterField(
                             model_name=model_name.lower(),
                             name='a',
@@ -919,8 +889,8 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     ]
 
                 result = self._run_migration_test(
-                    MigrationA=TestMigrationA,
-                    MigrationB=TestMigrationB,
+                    operations_a=operations_a,
+                    operations_b=operations_b,
                     migration_name_prefix='test_mc_typenull',
                     model_name=model_name,
                     use_single_context=use_single_context,
@@ -949,10 +919,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                 suffix = '_combined' if use_single_context else '_split'
                 model_name = f'TestMetaIdxUniqTogether{suffix}'
 
-                class TestMigrationA(migrations.Migration):
-                    initial = True
-
-                    operations = [
+                operations_a = [
                         migrations.CreateModel(
                             name=model_name,
                             fields=[
@@ -972,8 +939,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                         ),
                     ]
 
-                class TestMigrationB(migrations.Migration):
-                    operations = [
+                operations_b = [
                         migrations.AlterField(
                             model_name=model_name.lower(),
                             name='a',
@@ -982,8 +948,8 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     ]
 
                 result = self._run_migration_test(
-                    MigrationA=TestMigrationA,
-                    MigrationB=TestMigrationB,
+                    operations_a=operations_a,
+                    operations_b=operations_b,
                     migration_name_prefix='test_mc_uniqtog',
                     model_name=model_name,
                     use_single_context=use_single_context,
@@ -1025,10 +991,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                 ref_model_name = f'TestMetaIdxFKRef{suffix}'
                 model_name = f'TestMetaIdxFK{suffix}'
 
-                class TestMigrationA(migrations.Migration):
-                    initial = True
-
-                    operations = [
+                operations_a = [
                         migrations.CreateModel(
                             name=ref_model_name,
                             fields=[
@@ -1053,8 +1016,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                         ),
                     ]
 
-                class TestMigrationB(migrations.Migration):
-                    operations = [
+                operations_b = [
                         migrations.AlterField(
                             model_name=model_name.lower(),
                             name='fk_field',
@@ -1067,8 +1029,8 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     ]
 
                 result = self._run_migration_test(
-                    MigrationA=TestMigrationA,
-                    MigrationB=TestMigrationB,
+                    operations_a=operations_a,
+                    operations_b=operations_b,
                     migration_name_prefix='test_mc_fk',
                     model_name=model_name,
                     use_single_context=use_single_context,
@@ -1097,10 +1059,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                 suffix = '_combined' if use_single_context else '_split'
                 model_name = f'TestMetaMulti{suffix}'
 
-                class TestMigrationA(migrations.Migration):
-                    initial = True
-
-                    operations = [
+                operations_a = [
                         migrations.CreateModel(
                             name=model_name,
                             fields=[
@@ -1120,8 +1079,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                         ),
                     ]
 
-                class TestMigrationB(migrations.Migration):
-                    operations = [
+                operations_b = [
                         migrations.AlterField(
                             model_name=model_name.lower(),
                             name='a',
@@ -1130,8 +1088,8 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     ]
 
                 result = self._run_migration_test(
-                    MigrationA=TestMigrationA,
-                    MigrationB=TestMigrationB,
+                    operations_a=operations_a,
+                    operations_b=operations_b,
                     migration_name_prefix='test_mc_multi',
                     model_name=model_name,
                     use_single_context=use_single_context,
@@ -1171,10 +1129,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                 suffix = '_combined' if use_single_context else '_split'
                 model_name = f'TestMetaIdxNotNull{suffix}'
 
-                class TestMigrationA(migrations.Migration):
-                    initial = True
-
-                    operations = [
+                operations_a = [
                         migrations.CreateModel(
                             name=model_name,
                             fields=[
@@ -1189,8 +1144,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                         ),
                     ]
 
-                class TestMigrationB(migrations.Migration):
-                    operations = [
+                operations_b = [
                         migrations.AlterField(
                             model_name=model_name.lower(),
                             name='a',
@@ -1199,8 +1153,8 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     ]
 
                 result = self._run_migration_test(
-                    MigrationA=TestMigrationA,
-                    MigrationB=TestMigrationB,
+                    operations_a=operations_a,
+                    operations_b=operations_b,
                     migration_name_prefix='test_mc_notnull',
                     model_name=model_name,
                     use_single_context=use_single_context,
@@ -1236,10 +1190,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                 suffix = '_combined' if use_single_context else '_split'
                 model_name = f'TestMetaIdxAutoField{suffix}'
 
-                class TestMigrationA(migrations.Migration):
-                    initial = True
-
-                    operations = [
+                operations_a = [
                         migrations.CreateModel(
                             name=model_name,
                             fields=[
@@ -1254,8 +1205,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                         ),
                     ]
 
-                class TestMigrationB(migrations.Migration):
-                    operations = [
+                operations_b = [
                         migrations.AlterField(
                             model_name=model_name.lower(),
                             name='id',
@@ -1264,8 +1214,8 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     ]
 
                 result = self._run_migration_test(
-                    MigrationA=TestMigrationA,
-                    MigrationB=TestMigrationB,
+                    operations_a=operations_a,
+                    operations_b=operations_b,
                     migration_name_prefix='test_mc_auto',
                     model_name=model_name,
                     use_single_context=use_single_context,
@@ -1293,10 +1243,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                 suffix = '_combined' if use_single_context else '_split'
                 model_name = f'TestMetaIdxPK{suffix}'
 
-                class TestMigrationA(migrations.Migration):
-                    initial = True
-
-                    operations = [
+                operations_a = [
                         migrations.CreateModel(
                             name=model_name,
                             fields=[
@@ -1311,8 +1258,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                         ),
                     ]
 
-                class TestMigrationB(migrations.Migration):
-                    operations = [
+                operations_b = [
                         migrations.AlterField(
                             model_name=model_name.lower(),
                             name='id',
@@ -1321,8 +1267,8 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     ]
 
                 result = self._run_migration_test(
-                    MigrationA=TestMigrationA,
-                    MigrationB=TestMigrationB,
+                    operations_a=operations_a,
+                    operations_b=operations_b,
                     migration_name_prefix='test_mc_pk',
                     model_name=model_name,
                     use_single_context=use_single_context,
@@ -1371,10 +1317,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                 suffix = '_combined' if use_single_context else '_split'
                 model_name = f'TestIdxTogether{suffix}'
 
-                class TestMigrationA(migrations.Migration):
-                    initial = True
-
-                    operations = [
+                operations_a = [
                         migrations.CreateModel(
                             name=model_name,
                             fields=[
@@ -1389,8 +1332,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                         ),
                     ]
 
-                class TestMigrationB(migrations.Migration):
-                    operations = [
+                operations_b = [
                         migrations.AlterField(
                             model_name=model_name.lower(),
                             name='a',
@@ -1399,8 +1341,8 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     ]
 
                 result = self._run_migration_test(
-                    MigrationA=TestMigrationA,
-                    MigrationB=TestMigrationB,
+                    operations_a=operations_a,
+                    operations_b=operations_b,
                     migration_name_prefix='test_idxtog',
                     model_name=model_name,
                     use_single_context=use_single_context,
@@ -1435,10 +1377,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                 suffix = '_combined' if use_single_context else '_split'
                 model_name = f'TestUniqueAndUniqTogether{suffix}'
 
-                class TestMigrationA(migrations.Migration):
-                    initial = True
-
-                    operations = [
+                operations_a = [
                         migrations.CreateModel(
                             name=model_name,
                             fields=[
@@ -1453,8 +1392,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                         ),
                     ]
 
-                class TestMigrationB(migrations.Migration):
-                    operations = [
+                operations_b = [
                         migrations.AlterField(
                             model_name=model_name.lower(),
                             name='a',
@@ -1463,8 +1401,8 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     ]
 
                 result = self._run_migration_test(
-                    MigrationA=TestMigrationA,
-                    MigrationB=TestMigrationB,
+                    operations_a=operations_a,
+                    operations_b=operations_b,
                     migration_name_prefix='test_uniq_uniqtog',
                     model_name=model_name,
                     use_single_context=use_single_context,
