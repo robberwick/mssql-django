@@ -435,6 +435,9 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         #      AND is in index_together, only the db_index=True index is restored.
         #      Note: index_together is deprecated and removed in Django 5.1+.
         #
+        #   3. Rename & type/nullability change: Indexes from _meta.indexes are not
+        #      restored if a field is renamed AND has a type or nullability change.
+        #
         # DEDUPLICATION:
         #   - When both type AND nullability change, both DROP paths execute
         #   - Without dedup, indexes would be dropped twice and restored twice
