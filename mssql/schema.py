@@ -414,14 +414,10 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         # altering column types or nullability. This method handles alterations in
         # four phases:
         #
-        # CONSTRAINT AND SPECIAL CASE HANDLING
-        #
-        # COLUMN ALTER PREPARATION
-        #
-        # COLUMN ALTERATION
-        #
-        # COLUMN ALTERATION CLEANUP
-        #
+        # 1. Constraint and special case handling
+        # 2. Column alter preparation
+        # 3. Column alteration
+        # 4. Column alteration cleanup
         #
         #
         # KNOWN BUGS/LIMITATIONS:
@@ -447,7 +443,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         # ============================================================================
 
         # ============================================================================
-        # CONSTRAINT AND SPECIAL CASE HANDLING
+        # 1. Constraint and special case handling
         # ============================================================================
 
         # the backend doesn't support altering a column to/from AutoField as
@@ -614,7 +610,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                     sql.rename_column_references(model._meta.db_table, old_field.column, new_field.column)
 
         # ===============================================================================
-        # COLUMN ALTER PREPARATION
+        # 2. Column alter preparation
         # ===============================================================================
 
         # Next, start accumulating actions to do
@@ -707,7 +703,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                 indexes_dropped = self._delete_indexes(model, old_field, new_field)
 
         # ================================================================================
-        # COLUMN ALTERATION
+        # 3. Column alteration
         # ================================================================================
 
         # Only if we have a default and there is a change from NULL to NOT NULL
@@ -793,7 +789,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             self.execute(self._create_index_sql(model, [new_field]))
 
         # ================================================================================
-        # COLUMN ALTER CLEANUP
+        # 4. Column alteration cleanup
         # ================================================================================
         # WHEN THIS RUNS:
         #   - Only if type changed OR nullability changed
