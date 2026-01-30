@@ -423,7 +423,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         # KNOWN BUGS/LIMITATIONS:
         #   1. AutoField Bug: AutoField special handling restores db_index fields but
         #      then breaks early, skipping Meta.indexes restoration. This means indexes
-        #      defined in _meta.indexes containing an AutoField/BigAutoField are NOT restored.
+        #      defined in Meta.indexes containing an AutoField/BigAutoField are NOT restored.
         #      Test: test_autofield_type_change_preserves_indexes (marked @expectedFailure)
         #
         #   2. index_together Limitation: Only restored when field does NOT have
@@ -431,7 +431,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         #      AND is in index_together, only the db_index=True index is restored.
         #      Note: index_together is deprecated and removed in Django 5.1+.
         #
-        #   3. Rename & type/nullability change: Indexes from _meta.indexes are not
+        #   3. Rename & type/nullability change: Indexes from Meta.indexes are not
         #      restored if a field is renamed AND has a type or nullability change.
         #
         # DEDUPLICATION:
@@ -952,7 +952,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                         self.execute(create_index_sql_statement)
 
             # --------------------------------------------------------------------------------
-            # Collect indexes defined in _meta.indexes
+            # Collect indexes defined in Meta.indexes
             # --------------------------------------------------------------------------------
             # Collect Index objects (not just field lists) to preserve explicit names
             # and other index attributes when calling index.create_sql().
