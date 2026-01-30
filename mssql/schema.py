@@ -692,6 +692,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                 # Drop unique constraint, SQL Server requires explicit deletion
                 self._delete_unique_constraints(model, old_field, new_field, strict)
                 # Drop indexes, SQL Server requires explicit deletion
+                self._delete_indexes(model, old_field, new_field)
 
         # ================================================================================
         # 3. Column alteration
