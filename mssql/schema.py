@@ -439,8 +439,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         #   - Without dedup, indexes would be dropped twice and restored twice
         #   - Dedup checks against: deferred_sql (Django's queue) and post_actions (our queue)
         #   - See inline comments in COLUMN ALTER CLEANUP for implementation details
-        #
-        # ============================================================================
+
 
         # ============================================================================
         # 1. Constraint and special case handling
@@ -618,16 +617,13 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         null_actions = []
         post_actions = []
 
-        # ================================================================================
-        # COLUMN ALTER PREPARATION: TYPE CHANGE PATH
-        # ================================================================================
+        # Column alter preparation: type change path
         # Triggers when: Column type changes (or db_comment changes in Django 4.2+)
         # Drops: Unique constraints + all indexes containing this field
         #
         # SQL Server requires indexes/constraints to be dropped before ALTER COLUMN
         # can change the column's data type. This path drops both unique constraints
         # and all indexes that include the altered field.
-        # ================================================================================
 
         if old_type != new_type or (django_version >= (4, 2) and
                 self.connection.features.supports_comments
@@ -682,16 +678,13 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         if needs_database_default:
             actions.append(self._alter_column_default_sql(model, old_field, new_field))
 
-        # ================================================================================
-        # COLUMN ALTER PREPARATION: NULLABILITY CHANGE PATH
-        # ================================================================================
+        # Column alter preparation: nullability change path
         # Triggers when: Column nullability changes (NULL ↔ NOT NULL)
         # Drops: Unique constraints + all indexes containing this field
         # Captures: List of dropped index names in 'indexes_dropped' variable
         #
         # SQL Server requires indexes/constraints to be dropped before ALTER COLUMN
         # can change the column's NULL/NOT NULL constraint.
-        # ================================================================================
 
         if old_field.null != new_field.null:
             fragment = self._alter_column_null_sql(model, old_field, new_field)
@@ -806,7 +799,6 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         #     - deferred_sql: Django's queue of deferred SQL statements
         #     - post_actions: Single-field indexes queued by NULLABILITY CHANGE PATH
         #   See inline dedup comments below for implementation details.
-        # ================================================================================
 
         # Restore indexes & unique constraints deleted above, SQL Server requires explicit restoration
         if (old_type != new_type or (old_field.null != new_field.null)) and (
