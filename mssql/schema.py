@@ -787,10 +787,10 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         #   - Only if column was NOT renamed (rename is handled separately)
         #
         # DEDUPLICATION:
-        #   When both type AND nullability change, both DROP paths execute
+        #   When both type AND nullability change, both DROP paths execute.
         #   To prevent double restoration, each index creation checks against:
         #     - deferred_sql: Django's queue of deferred SQL statements
-        #     - post_actions: Single-field indexes queued by NULLABILITY CHANGE PATH
+        #     - post_actions: other_actions returned by _alter_column_type_sql()
         #   See inline dedup comments below for implementation details.
 
         # Restore indexes & unique constraints deleted above, SQL Server requires explicit restoration
@@ -908,7 +908,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             #   - index_columns: Field lists for db_index and index_together
             #   - indexes_to_restore: Index objects from Meta.indexes (preserves names)
             #
-            #   - DEDUPLICATION: Check against deferred_sql and post_actions to prevent
+            #   - Deduplication: Check against deferred_sql and post_actions to prevent
             #     double creation when both DROP paths triggered
             # --------------------------------------------------------------------------------
             index_columns = []
@@ -941,7 +941,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             # Execute restoration: db_index and index_together
             # --------------------------------------------------------------------------------
             # Deduplication: Skip if already in deferred_sql (Django's queue) or
-            # post_actions (nullability path's queue).
+            # post_actions (other_actions from _alter_column_type_sql).
             # --------------------------------------------------------------------------------
             if index_columns:
                 for columns in index_columns:
@@ -972,11 +972,10 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             # Restore Index objects using index.create_sql() to preserve explicit names
             # and attributes.
             #
-            # Deduplication: Skip if already in deferred_sql OR post_actions.
-            # This prevents duplicate index creation when either:
-            #   1. Type changed (this immediate restoration)
-            #   2. Nullability changed (queued restoration in post_actions)
-            # Without this check, the same index would be created twice.
+            # Deduplication: Skip if already in deferred_sql or post_actions
+            # (which contains other_actions from _alter_column_type_sql).
+            # This prevents duplicate index creation if the same index
+            # was already scheduled elsewhere.
             # --------------------------------------------------------------------------------
             for index in indexes_to_restore:
                 create_index_sql_statement = index.create_sql(model, self)
