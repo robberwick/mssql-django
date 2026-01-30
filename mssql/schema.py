@@ -681,7 +681,6 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         # Column alter preparation: nullability change path
         # Triggers when: Column nullability changes (NULL ↔ NOT NULL)
         # Drops: Unique constraints + all indexes containing this field
-        # Captures: List of dropped index names in 'indexes_dropped' variable
         #
         # SQL Server requires indexes/constraints to be dropped before ALTER COLUMN
         # can change the column's NULL/NOT NULL constraint.
@@ -693,7 +692,6 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                 # Drop unique constraint, SQL Server requires explicit deletion
                 self._delete_unique_constraints(model, old_field, new_field, strict)
                 # Drop indexes, SQL Server requires explicit deletion
-                indexes_dropped = self._delete_indexes(model, old_field, new_field)
 
         # ================================================================================
         # 3. Column alteration
