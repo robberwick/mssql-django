@@ -786,11 +786,6 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         #   - Only if type changed OR nullability changed
         #   - Only if column was NOT renamed (rename is handled separately)
         #
-        # EXECUTION MODE:
-        #   Uses IMMEDIATE execution via self.execute() for all restorations here.
-        #   Note that we can do this immediately because the field alterations have been done,
-        #   so there is no need to defer any more.
-        #
         # DEDUPLICATION:
         #   When both type AND nullability change, both DROP paths execute
         #   To prevent double restoration, each index creation checks against:
@@ -913,8 +908,6 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             #   - index_columns: Field lists for db_index and index_together
             #   - indexes_to_restore: Index objects from Meta.indexes (preserves names)
             #
-            # Restoration strategy:
-            #   - IMMEDIATE execution via self.execute() (column changes already applied)
             #   - DEDUPLICATION: Check against deferred_sql and post_actions to prevent
             #     double creation when both DROP paths triggered
             # --------------------------------------------------------------------------------
@@ -947,7 +940,6 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             # --------------------------------------------------------------------------------
             # Execute restoration: db_index and index_together
             # --------------------------------------------------------------------------------
-            # Immediate execution via self.execute() (column changes already applied).
             # Deduplication: Skip if already in deferred_sql (Django's queue) or
             # post_actions (nullability path's queue).
             # --------------------------------------------------------------------------------
