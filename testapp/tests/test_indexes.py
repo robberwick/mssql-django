@@ -274,8 +274,8 @@ class TestMetaIndexesRetained(TransactionTestCase):
         )
         self.assertTrue(found, error_msg)
 
-    def _get_context_description(self, use_single_context: bool) -> str:
-        return "combined context" if use_single_context else "split contexts"
+    def _get_context_description(self, use_single_migration: bool) -> str:
+        return "combined single migration" if use_single_migration else "split into 2 migrations"
 
     def test_index_from_meta_indexes_retained_after_type_change(self):
         """
