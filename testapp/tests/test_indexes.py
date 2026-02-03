@@ -203,7 +203,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
         operations_b: list,
         migration_name_prefix: str,
         model_name: str,
-        use_single_context: bool,
+        use_single_migration: bool,
     ) -> MigrationTestResult:
         """
         Helper to run migration tests with either combined or split schema_editor contexts.
@@ -213,7 +213,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
             operations_b: List of operations for the alteration being tested
             migration_name_prefix: Prefix for migration names (e.g., 'test_mc_type')
             model_name: Name of the model being tested
-            use_single_context: If True, combine both operation lists into one Migration;
+            use_single_migration: If True, combine both operation lists into one Migration;
                                If False, create two separate Migrations
 
         Returns:
@@ -221,9 +221,9 @@ class TestMetaIndexesRetained(TransactionTestCase):
         """
         # Use django.db.connections to get a fresh connection for TransactionTestCase
         conn = django.db.connections[django.db.DEFAULT_DB_ALIAS]
-        suffix = '_combined' if use_single_context else '_split'
+        suffix = '_combined' if use_single_migration else '_split'
 
-        if use_single_context:
+        if use_single_migration:
             # Combined: Create ONE migration with all operations combined
             # This simulates combining operations in a single migration file
             class CombinedMigration(migrations.Migration):
@@ -281,12 +281,12 @@ class TestMetaIndexesRetained(TransactionTestCase):
         """
         Test that indexes defined in Meta.indexes are retained when altering field type (max_length change).
         This exercises the type change code path in _alter_field.
-        Runs with both split and combined migration contexts.
+        Runs with both split and combined migrations
         """
-        for use_single_context in [False, True]:
+        for use_single_migration in [False, True]:
 
-            with self.subTest(single_context=use_single_context):
-                suffix = '_combined' if use_single_context else '_split'
+            with self.subTest(single_migration=use_single_migration):
+                suffix = '_combined' if use_single_migration else '_split'
                 model_name = f'TestMetaIdxType{suffix}'
 
                 operations_a = [
@@ -317,7 +317,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     operations_b=operations_b,
                     migration_name_prefix='test_mc_type',
                     model_name=model_name,
-                    use_single_context=use_single_context,
+                    use_single_migration=use_single_migration,
                 )
 
                 self._assert_index_exists(
@@ -325,7 +325,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     expected_columns={'a', 'b'},
                     error_msg=(
                         f"Index on ('a', 'b') from Meta.indexes was not recreated after field type change "
-                        f"({self._get_context_description(use_single_context)}). Expected index to be restored after ALTER COLUMN operation."
+                        f"({self._get_context_description(use_single_migration)}). Expected index to be restored after ALTER COLUMN operation."
                     ),
                 )
 
@@ -333,12 +333,12 @@ class TestMetaIndexesRetained(TransactionTestCase):
         """
         Test that indexes defined in Meta.indexes are retained when changing field nullability.
         This exercises the nullability change code path in _alter_field.
-        Runs with both split and combined migration contexts.
+        Runs with both split and combined migrations
         """
-        for use_single_context in [False, True]:
+        for use_single_migration in [False, True]:
 
-            with self.subTest(single_context=use_single_context):
-                suffix = '_combined' if use_single_context else '_split'
+            with self.subTest(single_migration=use_single_migration):
+                suffix = '_combined' if use_single_migration else '_split'
                 model_name = f'TestMetaIdxNull{suffix}'
 
                 operations_a = [
@@ -369,7 +369,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     operations_b=operations_b,
                     migration_name_prefix='test_mc_null',
                     model_name=model_name,
-                    use_single_context=use_single_context,
+                    use_single_migration=use_single_migration,
                 )
 
                 self._assert_index_exists(
@@ -377,7 +377,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     expected_columns={'a', 'b'},
                     error_msg=(
                         f"Index on ('a', 'b') from Meta.indexes was not recreated after nullability change "
-                        f"({self._get_context_description(use_single_context)}). Expected index to be restored after ALTER COLUMN NULL operation."
+                        f"({self._get_context_description(use_single_migration)}). Expected index to be restored after ALTER COLUMN NULL operation."
                     ),
                 )
 
@@ -390,12 +390,12 @@ class TestMetaIndexesRetained(TransactionTestCase):
         - Field nullability changes (null=False → null=True)
         - Field type does NOT change (same max_length)
 
-        Runs with both split and combined migration contexts.
+        Runs with both split and combined migrations
         """
-        for use_single_context in [False, True]:
+        for use_single_migration in [False, True]:
 
-            with self.subTest(single_context=use_single_context):
-                suffix = '_combined' if use_single_context else '_split'
+            with self.subTest(single_migration=use_single_migration):
+                suffix = '_combined' if use_single_migration else '_split'
                 model_name = f'TestDbIndexNullChange{suffix}'
 
                 operations_a = [
@@ -421,7 +421,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     operations_b=operations_b,
                     migration_name_prefix='test_dbidx_null',
                     model_name=model_name,
-                    use_single_context=use_single_context,
+                    use_single_migration=use_single_migration,
                 )
 
                 # Verify db_index=True index was retained
@@ -433,7 +433,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                 self.assertTrue(
                     len(db_index_indexes) > 0,
                     f"db_index=True index on 'a' was not retained after nullability-only change "
-                    f"({self._get_context_description(use_single_context)}). "
+                    f"({self._get_context_description(use_single_migration)}). "
                     f"Expected index from db_index=True to be restored after changing null=False to null=True."
                 )
 
@@ -444,12 +444,12 @@ class TestMetaIndexesRetained(TransactionTestCase):
         This is the reverse direction of test_db_index_retained_after_nullability_only_change
         and exercises the four-way default alteration path in _alter_field (requires a default value).
 
-        Runs with both split and combined migration contexts.
+        Runs with both split and combined migrations
         """
-        for use_single_context in [False, True]:
+        for use_single_migration in [False, True]:
 
-            with self.subTest(single_context=use_single_context):
-                suffix = '_combined' if use_single_context else '_split'
+            with self.subTest(single_migration=use_single_migration):
+                suffix = '_combined' if use_single_migration else '_split'
                 model_name = f'TestDbIndexNotNull{suffix}'
 
                 operations_a = [
@@ -475,7 +475,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     operations_b=operations_b,
                     migration_name_prefix='test_dbidx_notnull',
                     model_name=model_name,
-                    use_single_context=use_single_context,
+                    use_single_migration=use_single_migration,
                 )
 
                 # Verify db_index=True index was retained
@@ -486,7 +486,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                 self.assertTrue(
                     len(db_index_indexes) > 0,
                     f"db_index=True index on 'a' was not retained after nullability change from NULL to NOT NULL "
-                    f"({self._get_context_description(use_single_context)}). "
+                    f"({self._get_context_description(use_single_migration)}). "
                     f"Expected index from db_index=True to be restored after four-way default alteration."
                 )
 
@@ -494,12 +494,12 @@ class TestMetaIndexesRetained(TransactionTestCase):
         """
         Test that indexes defined in Meta.indexes are retained and updated when renaming a field.
         The index should exist on the renamed column.
-        Runs with both split and combined migration contexts.
+        Runs with both split and combined migrations
         """
-        for use_single_context in [False, True]:
+        for use_single_migration in [False, True]:
 
-            with self.subTest(single_context=use_single_context):
-                suffix = '_combined' if use_single_context else '_split'
+            with self.subTest(single_migration=use_single_migration):
+                suffix = '_combined' if use_single_migration else '_split'
                 model_name = f'TestMetaIdxRename{suffix}'
 
                 operations_a = [
@@ -530,7 +530,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     operations_b=operations_b,
                     migration_name_prefix='test_mc_rename',
                     model_name=model_name,
-                    use_single_context=use_single_context,
+                    use_single_migration=use_single_migration,
                 )
 
                 self._assert_index_exists(
@@ -538,7 +538,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     expected_columns={'a_renamed', 'b'},
                     error_msg=(
                         f"Index on ('a_renamed', 'b') from Meta.indexes was not found after field rename "
-                        f"({self._get_context_description(use_single_context)}). Expected index to be updated to reflect the renamed column."
+                        f"({self._get_context_description(use_single_migration)}). Expected index to be updated to reflect the renamed column."
                     ),
                 )
 
@@ -555,12 +555,12 @@ class TestMetaIndexesRetained(TransactionTestCase):
         look up the index field by the old field name, but RenameField has already updated
         the model state, so the old field name no longer exists.
 
-        Runs with both split and combined migration contexts.
+        Runs with both split and combined migrations
         """
-        for use_single_context in [False, True]:
+        for use_single_migration in [False, True]:
 
-            with self.subTest(single_context=use_single_context):
-                suffix = '_combined' if use_single_context else '_split'
+            with self.subTest(single_migration=use_single_migration):
+                suffix = '_combined' if use_single_migration else '_split'
                 model_name = f'TestMetaIdxRenameType{suffix}'
 
                 operations_a = [
@@ -598,7 +598,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     operations_b=operations_b,
                     migration_name_prefix='test_mc_rename_type',
                     model_name=model_name,
-                    use_single_context=use_single_context,
+                    use_single_migration=use_single_migration,
                 )
 
                 self._assert_index_exists(
@@ -606,7 +606,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     expected_columns={'a_renamed', 'b'},
                     error_msg=(
                         f"Index on ('a_renamed', 'b') from Meta.indexes was not found after field rename + type change "
-                        f"({self._get_context_description(use_single_context)}). "
+                        f"({self._get_context_description(use_single_migration)}). "
                         f"Expected index to be retained when both rename and type change occur."
                     ),
                 )
@@ -624,12 +624,12 @@ class TestMetaIndexesRetained(TransactionTestCase):
         look up the index field by the old field name, but RenameField has already updated
         the model state, so the old field name no longer exists.
 
-        Runs with both split and combined migration contexts.
+        Runs with both split and combined migrations
         """
-        for use_single_context in [False, True]:
+        for use_single_migration in [False, True]:
 
-            with self.subTest(single_context=use_single_context):
-                suffix = '_combined' if use_single_context else '_split'
+            with self.subTest(single_migration=use_single_migration):
+                suffix = '_combined' if use_single_migration else '_split'
                 model_name = f'TestMetaIdxRenameNull{suffix}'
 
                 operations_a = [
@@ -667,7 +667,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     operations_b=operations_b,
                     migration_name_prefix='test_mc_rename_null',
                     model_name=model_name,
-                    use_single_context=use_single_context,
+                    use_single_migration=use_single_migration,
                 )
 
                 self._assert_index_exists(
@@ -675,7 +675,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     expected_columns={'a_renamed', 'b'},
                     error_msg=(
                         f"Index on ('a_renamed', 'b') from Meta.indexes was not found after field rename + nullability change "
-                        f"({self._get_context_description(use_single_context)}). "
+                        f"({self._get_context_description(use_single_migration)}). "
                         f"Expected index to be retained when both rename and nullability change occur."
                     ),
                 )
@@ -684,12 +684,12 @@ class TestMetaIndexesRetained(TransactionTestCase):
         """
         Test that indexes defined in Meta.indexes are retained when altering multiple fields in the index.
         This ensures the index is properly restored even when both participating columns are altered.
-        Runs with both split and combined migration contexts.
+        Runs with both split and combined migrations
         """
-        for use_single_context in [False, True]:
+        for use_single_migration in [False, True]:
 
-            with self.subTest(single_context=use_single_context):
-                suffix = '_combined' if use_single_context else '_split'
+            with self.subTest(single_migration=use_single_migration):
+                suffix = '_combined' if use_single_migration else '_split'
                 model_name = f'TestMetaIdxBoth{suffix}'
 
                 operations_a = [
@@ -725,7 +725,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     operations_b=operations_b,
                     migration_name_prefix='test_mc_both',
                     model_name=model_name,
-                    use_single_context=use_single_context,
+                    use_single_migration=use_single_migration,
                 )
 
                 self._assert_index_exists(
@@ -733,7 +733,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     expected_columns={'a', 'b'},
                     error_msg=(
                         f"Index on ('a', 'b') from Meta.indexes was not recreated after altering both fields "
-                        f"({self._get_context_description(use_single_context)}). Expected index to be restored after multiple ALTER COLUMN operations."
+                        f"({self._get_context_description(use_single_migration)}). Expected index to be restored after multiple ALTER COLUMN operations."
                     ),
                 )
 
@@ -741,12 +741,12 @@ class TestMetaIndexesRetained(TransactionTestCase):
         """
         Test that indexes with 3+ columns are retained when altering one of the fields.
         This ensures the fix works for indexes with more than 2 columns.
-        Runs with both split and combined migration contexts.
+        Runs with both split and combined migrations
         """
-        for use_single_context in [False, True]:
-            context_desc = "combined context" if use_single_context else "split contexts"
-            with self.subTest(single_context=use_single_context):
-                suffix = '_combined' if use_single_context else '_split'
+        for use_single_migration in [False, True]:
+            context_desc = "combined context" if use_single_migration else "split contexts"
+            with self.subTest(single_migration=use_single_migration):
+                suffix = '_combined' if use_single_migration else '_split'
                 model_name = f'TestMetaIdx3Col{suffix}'
 
                 operations_a = [
@@ -778,7 +778,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     operations_b=operations_b,
                     migration_name_prefix='test_mc_3col',
                     model_name=model_name,
-                    use_single_context=use_single_context,
+                    use_single_migration=use_single_migration,
                 )
 
                 self._assert_index_exists(
@@ -786,7 +786,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     expected_columns={'a', 'b', 'c'},
                     error_msg=(
                         f"Three-column index on ('a', 'b', 'c') was not recreated after field alteration "
-                        f"({self._get_context_description(use_single_context)}). Expected index to be restored after ALTER COLUMN operation on middle column."
+                        f"({self._get_context_description(use_single_migration)}). Expected index to be restored after ALTER COLUMN operation on middle column."
                     ),
                 )
 
@@ -795,10 +795,10 @@ class TestMetaIndexesRetained(TransactionTestCase):
         Test that when a field has indexes from both db_index=True and Meta.indexes, those
         indexes are both retained after altering that field.
         """
-        for use_single_context in [False, True]:
-            context_desc = "combined context" if use_single_context else "split contexts"
-            with self.subTest(single_context=use_single_context):
-                suffix = '_combined' if use_single_context else '_split'
+        for use_single_migration in [False, True]:
+            context_desc = "combined context" if use_single_migration else "split contexts"
+            with self.subTest(single_migration=use_single_migration):
+                suffix = '_combined' if use_single_migration else '_split'
                 model_name = f'TestMetaIdxDbIdx{suffix}'
 
                 operations_a = [
@@ -829,7 +829,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     operations_b=operations_b,
                     migration_name_prefix='test_mc_dbidx',
                     model_name=model_name,
-                    use_single_context=use_single_context,
+                    use_single_migration=use_single_migration,
                 )
 
                 # Check that _meta_indexes index was recreated
@@ -838,7 +838,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     expected_columns={'a', 'b'},
                     error_msg=(
                         f"Index on ('a', 'b') from Meta.indexes was not recreated after field type change "
-                        f"({self._get_context_description(use_single_context)})."
+                        f"({self._get_context_description(use_single_migration)})."
                     ),
                 )
 
@@ -848,7 +848,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     expected_columns={'a'},
                     error_msg=(
                         "Index on 'a' from db_index=True was not recreated "
-                        f"after field type change ({self._get_context_description(use_single_context)})."
+                        f"after field type change ({self._get_context_description(use_single_migration)})."
                     ),
                 )
 
@@ -857,12 +857,12 @@ class TestMetaIndexesRetained(TransactionTestCase):
         Test that indexes defined in Meta.indexes are retained when BOTH type and nullability change simultaneously.
         This exercises both code paths in _alter_field (type change AND nullability change).
         The index should only be dropped once and recreated once (tests deduplication logic).
-        Runs with both split and combined migration contexts.
+        Runs with both split and combined migrations
         """
-        for use_single_context in [False, True]:
+        for use_single_migration in [False, True]:
 
-            with self.subTest(single_context=use_single_context):
-                suffix = '_combined' if use_single_context else '_split'
+            with self.subTest(single_migration=use_single_migration):
+                suffix = '_combined' if use_single_migration else '_split'
                 model_name = f'TestMetaIdxTypeNull{suffix}'
 
                 operations_a = [
@@ -893,7 +893,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     operations_b=operations_b,
                     migration_name_prefix='test_mc_typenull',
                     model_name=model_name,
-                    use_single_context=use_single_context,
+                    use_single_migration=use_single_migration,
                 )
 
                 self._assert_index_exists(
@@ -901,7 +901,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     expected_columns={'a', 'b'},
                     error_msg=(
                         f"Index on ('a', 'b') from Meta.indexes was not recreated after simultaneous type and nullability change "
-                        f"({self._get_context_description(use_single_context)}). "
+                        f"({self._get_context_description(use_single_migration)}). "
                         f"Expected index to be restored after ALTER COLUMN operation changing both max_length and nullability."
                     ),
                 )
@@ -911,12 +911,12 @@ class TestMetaIndexesRetained(TransactionTestCase):
         Test that indexes defined in Meta.indexes coexist properly with unique_together constraints.
         Tests the case where a model has overlapping columns participating in both unique_together and
         indexes defined in Meta.indexes. The index defined in Meta.indexes should be retained after field alteration.
-        Runs with both split and combined migration contexts.
+        Runs with both split and combined migrations
         """
-        for use_single_context in [False, True]:
+        for use_single_migration in [False, True]:
 
-            with self.subTest(single_context=use_single_context):
-                suffix = '_combined' if use_single_context else '_split'
+            with self.subTest(single_migration=use_single_migration):
+                suffix = '_combined' if use_single_migration else '_split'
                 model_name = f'TestMetaIdxUniqTogether{suffix}'
 
                 operations_a = [
@@ -952,7 +952,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     operations_b=operations_b,
                     migration_name_prefix='test_mc_uniqtog',
                     model_name=model_name,
-                    use_single_context=use_single_context,
+                    use_single_migration=use_single_migration,
                 )
 
                 # Check that the index (a, c) from Meta.indexes was recreated
@@ -961,7 +961,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     expected_columns={'a', 'c'},
                     error_msg=(
                         f"Index on ('a', 'c') from Meta.indexes was not recreated after field alteration "
-                        f"({self._get_context_description(use_single_context)}). "
+                        f"({self._get_context_description(use_single_migration)}). "
                         f"Expected index to coexist with unique_together constraint on ('a', 'b')."
                     ),
                 )
@@ -974,7 +974,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                 self.assertTrue(
                     len(unique_constraints) > 0,
                     f"unique_together constraint on ('a', 'b') was lost "
-                    f"({self._get_context_description(use_single_context)})."
+                    f"({self._get_context_description(use_single_migration)})."
                 )
 
     def test_index_from_meta_indexes_retained_after_fk_alteration(self):
@@ -982,12 +982,12 @@ class TestMetaIndexesRetained(TransactionTestCase):
         Test that indexes defined in Meta.indexes containing ForeignKey fields are retained after FK alteration.
         ForeignKey handling in _alter_field is complex, and this ensures that indexes defined in Meta.indexes
         involving FK fields are properly restored.
-        Runs with both split and combined migration contexts.
+        Runs with both split and combined migrations
         """
-        for use_single_context in [False, True]:
+        for use_single_migration in [False, True]:
 
-            with self.subTest(single_context=use_single_context):
-                suffix = '_combined' if use_single_context else '_split'
+            with self.subTest(single_migration=use_single_migration):
+                suffix = '_combined' if use_single_migration else '_split'
                 ref_model_name = f'TestMetaIdxFKRef{suffix}'
                 model_name = f'TestMetaIdxFK{suffix}'
 
@@ -1033,7 +1033,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     operations_b=operations_b,
                     migration_name_prefix='test_mc_fk',
                     model_name=model_name,
-                    use_single_context=use_single_context,
+                    use_single_migration=use_single_migration,
                 )
 
                 self._assert_index_exists(
@@ -1041,7 +1041,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     expected_columns={'fk_field_id', 'other_field'},
                     error_msg=(
                         f"Index on ('fk_field', 'other_field') from Meta.indexes was not recreated after FK alteration "
-                        f"({self._get_context_description(use_single_context)}). "
+                        f"({self._get_context_description(use_single_migration)}). "
                         f"Expected index to be restored after changing FK from CASCADE to SET_NULL with null=True."
                     ),
                 )
@@ -1051,12 +1051,12 @@ class TestMetaIndexesRetained(TransactionTestCase):
         Test that ALL indexes defined in Meta.indexes are retained when a field participates in multiple indexes.
         A field can be part of multiple different indexes defined in Meta.indexes, and all should be restored
         after altering that field.
-        Runs with both split and combined migration contexts.
+        Runs with both split and combined migrations
         """
-        for use_single_context in [False, True]:
+        for use_single_migration in [False, True]:
 
-            with self.subTest(single_context=use_single_context):
-                suffix = '_combined' if use_single_context else '_split'
+            with self.subTest(single_migration=use_single_migration):
+                suffix = '_combined' if use_single_migration else '_split'
                 model_name = f'TestMetaMulti{suffix}'
 
                 operations_a = [
@@ -1092,7 +1092,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     operations_b=operations_b,
                     migration_name_prefix='test_mc_multi',
                     model_name=model_name,
-                    use_single_context=use_single_context,
+                    use_single_migration=use_single_migration,
                 )
 
                 # Check that both indexes defined in Meta.indexes were recreated
@@ -1101,7 +1101,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     expected_columns={'a', 'b'},
                     error_msg=(
                         f"Index on ('a', 'b') from Meta.indexes was not recreated after field alteration "
-                        f"({self._get_context_description(use_single_context)}). "
+                        f"({self._get_context_description(use_single_migration)}). "
                         f"Expected BOTH indexes containing field 'a' to be restored."
                     ),
                 )
@@ -1111,7 +1111,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     expected_columns={'a', 'c'},
                     error_msg=(
                         f"Index on ('a', 'c') from Meta.indexes was not recreated after field alteration "
-                        f"({self._get_context_description(use_single_context)}). "
+                        f"({self._get_context_description(use_single_migration)}). "
                         f"Expected BOTH indexes containing field 'a' to be restored."
                     ),
                 )
@@ -1121,12 +1121,12 @@ class TestMetaIndexesRetained(TransactionTestCase):
         Test that indexes defined in Meta.indexes are retained when changing field from NULL to NOT NULL.
         This is the reverse direction of the existing nullability test and exercises the
         four-way default alteration path in _alter_field (requires a default value).
-        Runs with both split and combined migration contexts.
+        Runs with both split and combined migrations
         """
-        for use_single_context in [False, True]:
+        for use_single_migration in [False, True]:
 
-            with self.subTest(single_context=use_single_context):
-                suffix = '_combined' if use_single_context else '_split'
+            with self.subTest(single_migration=use_single_migration):
+                suffix = '_combined' if use_single_migration else '_split'
                 model_name = f'TestMetaIdxNotNull{suffix}'
 
                 operations_a = [
@@ -1157,7 +1157,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     operations_b=operations_b,
                     migration_name_prefix='test_mc_notnull',
                     model_name=model_name,
-                    use_single_context=use_single_context,
+                    use_single_migration=use_single_migration,
                 )
 
                 self._assert_index_exists(
@@ -1165,7 +1165,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     expected_columns={'a', 'b'},
                     error_msg=(
                         f"Index on ('a', 'b') from Meta.indexes was not recreated after nullability change from NULL to NOT NULL "
-                        f"({self._get_context_description(use_single_context)}). "
+                        f"({self._get_context_description(use_single_migration)}). "
                         f"Expected index to be restored after ALTER COLUMN operation with default value handling."
                     ),
                 )
@@ -1176,7 +1176,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
         Test that indexes defined in Meta.indexes are retained when changing AutoField to BigAutoField.
         This exercises the special AutoField/BigAutoField restoration path in _alter_field
         which restores ALL indexes on ALL fields, not just the altered field.
-        Runs with both split and combined migration contexts.
+        Runs with both split and combined migrations
 
         KNOWN BUG: This test currently fails because the AutoField/BigAutoField special
         handling block only restores indexes defined via db_index=True and then breaks
@@ -1184,10 +1184,10 @@ class TestMetaIndexesRetained(TransactionTestCase):
         The fix would require the AutoField block to also iterate through Meta.indexes
         or to not break early, allowing the subsequent restoration code to run.
         """
-        for use_single_context in [False, True]:
+        for use_single_migration in [False, True]:
 
-            with self.subTest(single_context=use_single_context):
-                suffix = '_combined' if use_single_context else '_split'
+            with self.subTest(single_migration=use_single_migration):
+                suffix = '_combined' if use_single_migration else '_split'
                 model_name = f'TestMetaIdxAutoField{suffix}'
 
                 operations_a = [
@@ -1218,7 +1218,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     operations_b=operations_b,
                     migration_name_prefix='test_mc_auto',
                     model_name=model_name,
-                    use_single_context=use_single_context,
+                    use_single_migration=use_single_migration,
                 )
 
                 self._assert_index_exists(
@@ -1226,7 +1226,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     expected_columns={'a', 'b'},
                     error_msg=(
                         f"Index on ('a', 'b') from Meta.indexes was not recreated after AutoField to BigAutoField change "
-                        f"({self._get_context_description(use_single_context)}). "
+                        f"({self._get_context_description(use_single_migration)}). "
                         f"Expected index to be restored via AutoField/BigAutoField special restoration path."
                     ),
                 )
@@ -1235,12 +1235,12 @@ class TestMetaIndexesRetained(TransactionTestCase):
         """
         Test that indexes defined in Meta.indexes are retained when changing primary key type.
         This tests the primary key restoration path alongside the restoration of indexes from Meta.indexes.
-        Runs with both split and combined migration contexts.
+        Runs with both split and combined migrations
         """
-        for use_single_context in [False, True]:
+        for use_single_migration in [False, True]:
 
-            with self.subTest(single_context=use_single_context):
-                suffix = '_combined' if use_single_context else '_split'
+            with self.subTest(single_migration=use_single_migration):
+                suffix = '_combined' if use_single_migration else '_split'
                 model_name = f'TestMetaIdxPK{suffix}'
 
                 operations_a = [
@@ -1271,7 +1271,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     operations_b=operations_b,
                     migration_name_prefix='test_mc_pk',
                     model_name=model_name,
-                    use_single_context=use_single_context,
+                    use_single_migration=use_single_migration,
                 )
 
                 # Verify primary key still exists
@@ -1281,7 +1281,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                 ]
                 self.assertTrue(
                     len(pk_constraints) > 0,
-                    f"Primary key was not restored ({self._get_context_description(use_single_context)})."
+                    f"Primary key was not restored ({self._get_context_description(use_single_migration)})."
                 )
 
                 # Verify index from Meta.indexes including PK column was restored
@@ -1290,7 +1290,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     expected_columns={'id', 'a'},
                     error_msg=(
                         f"Index on ('id', 'a') from Meta.indexes was not recreated after PK type change "
-                        f"({self._get_context_description(use_single_context)}). "
+                        f"({self._get_context_description(use_single_migration)}). "
                         f"Expected index containing PK column to be restored."
                     ),
                 )
@@ -1309,12 +1309,12 @@ class TestMetaIndexesRetained(TransactionTestCase):
         This test uses a field WITHOUT db_index=True to verify the index_together
         restoration works in that scenario.
 
-        Runs with both split and combined migration contexts.
+        Runs with both split and combined migrations
         """
-        for use_single_context in [False, True]:
+        for use_single_migration in [False, True]:
 
-            with self.subTest(single_context=use_single_context):
-                suffix = '_combined' if use_single_context else '_split'
+            with self.subTest(single_migration=use_single_migration):
+                suffix = '_combined' if use_single_migration else '_split'
                 model_name = f'TestIdxTogether{suffix}'
 
                 operations_a = [
@@ -1345,7 +1345,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     operations_b=operations_b,
                     migration_name_prefix='test_idxtog',
                     model_name=model_name,
-                    use_single_context=use_single_context,
+                    use_single_migration=use_single_migration,
                 )
 
                 # Verify index_together index was restored
@@ -1354,7 +1354,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     expected_columns={'a', 'b'},
                     error_msg=(
                         f"index_together index on ('a', 'b') was not recreated after type change "
-                        f"({self._get_context_description(use_single_context)}). "
+                        f"({self._get_context_description(use_single_migration)}). "
                         f"Expected index_together to be restored for field without db_index=True."
                     ),
                 )
@@ -1369,12 +1369,12 @@ class TestMetaIndexesRetained(TransactionTestCase):
         The unique_together constraint is NOT restored because the unique_together restoration is in an
         'else' block that only executes when the field does NOT have unique=True.
 
-        Runs with both split and combined migration contexts.
+        Runs with both split and combined migrations
         """
-        for use_single_context in [False, True]:
+        for use_single_migration in [False, True]:
 
-            with self.subTest(single_context=use_single_context):
-                suffix = '_combined' if use_single_context else '_split'
+            with self.subTest(single_migration=use_single_migration):
+                suffix = '_combined' if use_single_migration else '_split'
                 model_name = f'TestUniqueAndUniqTogether{suffix}'
 
                 operations_a = [
@@ -1405,7 +1405,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     operations_b=operations_b,
                     migration_name_prefix='test_uniq_uniqtog',
                     model_name=model_name,
-                    use_single_context=use_single_context,
+                    use_single_migration=use_single_migration,
                 )
 
                 # Check that single-field unique constraint on 'a' was restored
@@ -1416,7 +1416,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                 self.assertTrue(
                     len(single_unique_constraints) > 0,
                     f"Single-field unique constraint on 'a' was not restored "
-                    f"({self._get_context_description(use_single_context)})."
+                    f"({self._get_context_description(use_single_migration)})."
                 )
 
                 # Check that unique_together constraint on ('a', 'b') was restored
@@ -1428,7 +1428,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                 self.assertTrue(
                     len(unique_together_constraints) > 0,
                     f"unique_together constraint on ('a', 'b') was not restored when field 'a' has unique=True "
-                    f"({self._get_context_description(use_single_context)}). "
+                    f"({self._get_context_description(use_single_migration)}). "
                     f"This is a bug in mssql/schema.py: unique_together restoration is in an 'else' block "
                     f"that only executes when the field does NOT have unique=True."
                 )
