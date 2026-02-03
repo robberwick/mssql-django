@@ -436,13 +436,6 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         #      Test: test_index_from_meta_indexes_retained_after_rename_and_type_change
         #      and test_index_from_meta_indexes_retained_after_rename_and_nullability_change
         #      (both currently @expectedFailure)
-        #
-        # DEDUPLICATION:
-        #   - When both type AND nullability change, both DROP paths execute
-        #   - Without dedup, indexes would be dropped twice and restored twice
-        #   - Dedup checks against: deferred_sql (Django's queue) and post_actions (our queue)
-        #   - See inline comments in COLUMN ALTER CLEANUP for implementation details
-
 
         # ============================================================================
         # 1. Constraint and special case handling
