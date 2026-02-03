@@ -433,6 +433,9 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         #
         #   3. Rename & type/nullability change: Indexes from Meta.indexes are not
         #      restored if a field is renamed AND has a type or nullability change.
+        #      Test: test_index_from_meta_indexes_retained_after_rename_and_type_change
+        #      and test_index_from_meta_indexes_retained_after_rename_and_nullability_change
+        #      (both currently @expectedFailure)
         #
         # DEDUPLICATION:
         #   - When both type AND nullability change, both DROP paths execute
