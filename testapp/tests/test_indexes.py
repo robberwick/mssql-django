@@ -279,7 +279,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
 
     def test_index_from_meta_indexes_retained_after_type_change(self):
         """
-        Test that indexes defined in _meta.indexes are retained when altering field type (max_length change).
+        Test that indexes defined in Meta.indexes are retained when altering field type (max_length change).
         This exercises the type change code path in _alter_field.
         Runs with both split and combined migration contexts.
         """
@@ -324,14 +324,14 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     result.constraints,
                     expected_columns={'a', 'b'},
                     error_msg=(
-                        f"Index on ('a', 'b') from _meta.indexes was not recreated after field type change "
+                        f"Index on ('a', 'b') from Meta.indexes was not recreated after field type change "
                         f"({self._get_context_description(use_single_context)}). Expected index to be restored after ALTER COLUMN operation."
                     ),
                 )
 
     def test_index_from_meta_indexes_retained_after_nullability_change(self):
         """
-        Test that indexes defined in _meta.indexes are retained when changing field nullability.
+        Test that indexes defined in Meta.indexes are retained when changing field nullability.
         This exercises the nullability change code path in _alter_field.
         Runs with both split and combined migration contexts.
         """
@@ -376,7 +376,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     result.constraints,
                     expected_columns={'a', 'b'},
                     error_msg=(
-                        f"Index on ('a', 'b') from _meta.indexes was not recreated after nullability change "
+                        f"Index on ('a', 'b') from Meta.indexes was not recreated after nullability change "
                         f"({self._get_context_description(use_single_context)}). Expected index to be restored after ALTER COLUMN NULL operation."
                     ),
                 )
@@ -492,7 +492,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
 
     def test_index_from_meta_indexes_retained_after_field_rename(self):
         """
-        Test that indexes defined in _meta.indexes are retained and updated when renaming a field.
+        Test that indexes defined in Meta.indexes are retained and updated when renaming a field.
         The index should exist on the renamed column.
         Runs with both split and combined migration contexts.
         """
@@ -537,7 +537,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     result.constraints,
                     expected_columns={'a_renamed', 'b'},
                     error_msg=(
-                        f"Index on ('a_renamed', 'b') from _meta.indexes was not found after field rename "
+                        f"Index on ('a_renamed', 'b') from Meta.indexes was not found after field rename "
                         f"({self._get_context_description(use_single_context)}). Expected index to be updated to reflect the renamed column."
                     ),
                 )
@@ -605,7 +605,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     result.constraints,
                     expected_columns={'a_renamed', 'b'},
                     error_msg=(
-                        f"Index on ('a_renamed', 'b') from _meta.indexes was not found after field rename + type change "
+                        f"Index on ('a_renamed', 'b') from Meta.indexes was not found after field rename + type change "
                         f"({self._get_context_description(use_single_context)}). "
                         f"Expected index to be retained when both rename and type change occur."
                     ),
@@ -674,7 +674,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     result.constraints,
                     expected_columns={'a_renamed', 'b'},
                     error_msg=(
-                        f"Index on ('a_renamed', 'b') from _meta.indexes was not found after field rename + nullability change "
+                        f"Index on ('a_renamed', 'b') from Meta.indexes was not found after field rename + nullability change "
                         f"({self._get_context_description(use_single_context)}). "
                         f"Expected index to be retained when both rename and nullability change occur."
                     ),
@@ -682,7 +682,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
 
     def test_index_from_meta_indexes_retained_after_altering_both_fields(self):
         """
-        Test that indexes defined in _meta.indexes are retained when altering multiple fields in the index.
+        Test that indexes defined in Meta.indexes are retained when altering multiple fields in the index.
         This ensures the index is properly restored even when both participating columns are altered.
         Runs with both split and combined migration contexts.
         """
@@ -732,7 +732,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     result.constraints,
                     expected_columns={'a', 'b'},
                     error_msg=(
-                        f"Index on ('a', 'b') from _meta.indexes was not recreated after altering both fields "
+                        f"Index on ('a', 'b') from Meta.indexes was not recreated after altering both fields "
                         f"({self._get_context_description(use_single_context)}). Expected index to be restored after multiple ALTER COLUMN operations."
                     ),
                 )
@@ -792,7 +792,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
 
     def test_indexes_retained_for_field_with_db_index_and_meta_indexes(self):
         """
-        Test that when a field has indexes from both db_index=True and _meta.indexes, those
+        Test that when a field has indexes from both db_index=True and Meta.indexes, those
         indexes are both retained after altering that field.
         """
         for use_single_context in [False, True]:
@@ -837,7 +837,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     result.constraints,
                     expected_columns={'a', 'b'},
                     error_msg=(
-                        f"Index on ('a', 'b') from _meta.indexes was not recreated after field type change "
+                        f"Index on ('a', 'b') from Meta.indexes was not recreated after field type change "
                         f"({self._get_context_description(use_single_context)})."
                     ),
                 )
@@ -854,7 +854,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
 
     def test_index_from_meta_indexes_retained_after_type_and_nullability_change(self):
         """
-        Test that indexes defined in _meta.indexes are retained when BOTH type and nullability change simultaneously.
+        Test that indexes defined in Meta.indexes are retained when BOTH type and nullability change simultaneously.
         This exercises both code paths in _alter_field (type change AND nullability change).
         The index should only be dropped once and recreated once (tests deduplication logic).
         Runs with both split and combined migration contexts.
@@ -900,7 +900,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     result.constraints,
                     expected_columns={'a', 'b'},
                     error_msg=(
-                        f"Index on ('a', 'b') from _meta.indexes was not recreated after simultaneous type and nullability change "
+                        f"Index on ('a', 'b') from Meta.indexes was not recreated after simultaneous type and nullability change "
                         f"({self._get_context_description(use_single_context)}). "
                         f"Expected index to be restored after ALTER COLUMN operation changing both max_length and nullability."
                     ),
@@ -908,9 +908,9 @@ class TestMetaIndexesRetained(TransactionTestCase):
 
     def test_indexes_from_meta_indexes_retained_with_unique_together(self):
         """
-        Test that indexes defined in _meta.indexes coexist properly with unique_together constraints.
+        Test that indexes defined in Meta.indexes coexist properly with unique_together constraints.
         Tests the case where a model has overlapping columns participating in both unique_together and
-        indexes defined in _meta.indexes. The index defined in _meta.indexes should be retained after field alteration.
+        indexes defined in Meta.indexes. The index defined in Meta.indexes should be retained after field alteration.
         Runs with both split and combined migration contexts.
         """
         for use_single_context in [False, True]:
@@ -955,12 +955,12 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     use_single_context=use_single_context,
                 )
 
-                # Check that the index (a, c) from _meta.indexes was recreated
+                # Check that the index (a, c) from Meta.indexes was recreated
                 self._assert_index_exists(
                     result.constraints,
                     expected_columns={'a', 'c'},
                     error_msg=(
-                        f"Index on ('a', 'c') from _meta.indexes was not recreated after field alteration "
+                        f"Index on ('a', 'c') from Meta.indexes was not recreated after field alteration "
                         f"({self._get_context_description(use_single_context)}). "
                         f"Expected index to coexist with unique_together constraint on ('a', 'b')."
                     ),
@@ -979,8 +979,8 @@ class TestMetaIndexesRetained(TransactionTestCase):
 
     def test_index_from_meta_indexes_retained_after_fk_alteration(self):
         """
-        Test that indexes defined in _meta.indexes containing ForeignKey fields are retained after FK alteration.
-        ForeignKey handling in _alter_field is complex, and this ensures that indexes defined in _meta.indexes
+        Test that indexes defined in Meta.indexes containing ForeignKey fields are retained after FK alteration.
+        ForeignKey handling in _alter_field is complex, and this ensures that indexes defined in Meta.indexes
         involving FK fields are properly restored.
         Runs with both split and combined migration contexts.
         """
@@ -1040,7 +1040,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     result.constraints,
                     expected_columns={'fk_field_id', 'other_field'},
                     error_msg=(
-                        f"Index on ('fk_field', 'other_field') from _meta.indexes was not recreated after FK alteration "
+                        f"Index on ('fk_field', 'other_field') from Meta.indexes was not recreated after FK alteration "
                         f"({self._get_context_description(use_single_context)}). "
                         f"Expected index to be restored after changing FK from CASCADE to SET_NULL with null=True."
                     ),
@@ -1048,8 +1048,8 @@ class TestMetaIndexesRetained(TransactionTestCase):
 
     def test_multiple_index_from_meta_indexes_retained(self):
         """
-        Test that ALL indexes defined in _meta.indexes are retained when a field participates in multiple indexes.
-        A field can be part of multiple different indexes defined in _meta.indexes, and all should be restored
+        Test that ALL indexes defined in Meta.indexes are retained when a field participates in multiple indexes.
+        A field can be part of multiple different indexes defined in Meta.indexes, and all should be restored
         after altering that field.
         Runs with both split and combined migration contexts.
         """
@@ -1095,12 +1095,12 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     use_single_context=use_single_context,
                 )
 
-                # Check that both indexes defined in _meta.indexes were recreated
+                # Check that both indexes defined in Meta.indexes were recreated
                 self._assert_index_exists(
                     result.constraints,
                     expected_columns={'a', 'b'},
                     error_msg=(
-                        f"Index on ('a', 'b') from _meta.indexes was not recreated after field alteration "
+                        f"Index on ('a', 'b') from Meta.indexes was not recreated after field alteration "
                         f"({self._get_context_description(use_single_context)}). "
                         f"Expected BOTH indexes containing field 'a' to be restored."
                     ),
@@ -1110,7 +1110,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     result.constraints,
                     expected_columns={'a', 'c'},
                     error_msg=(
-                        f"Index on ('a', 'c') from _meta.indexes was not recreated after field alteration "
+                        f"Index on ('a', 'c') from Meta.indexes was not recreated after field alteration "
                         f"({self._get_context_description(use_single_context)}). "
                         f"Expected BOTH indexes containing field 'a' to be restored."
                     ),
@@ -1118,7 +1118,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
 
     def test_index_from_meta_indexes_retained_after_nullability_change_to_not_null(self):
         """
-        Test that indexes defined in _meta.indexes are retained when changing field from NULL to NOT NULL.
+        Test that indexes defined in Meta.indexes are retained when changing field from NULL to NOT NULL.
         This is the reverse direction of the existing nullability test and exercises the
         four-way default alteration path in _alter_field (requires a default value).
         Runs with both split and combined migration contexts.
@@ -1164,7 +1164,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     result.constraints,
                     expected_columns={'a', 'b'},
                     error_msg=(
-                        f"Index on ('a', 'b') from _meta.indexes was not recreated after nullability change from NULL to NOT NULL "
+                        f"Index on ('a', 'b') from Meta.indexes was not recreated after nullability change from NULL to NOT NULL "
                         f"({self._get_context_description(use_single_context)}). "
                         f"Expected index to be restored after ALTER COLUMN operation with default value handling."
                     ),
@@ -1173,14 +1173,14 @@ class TestMetaIndexesRetained(TransactionTestCase):
     @expectedFailure
     def test_autofield_type_change_preserves_indexes(self):
         """
-        Test that indexes defined in _meta.indexes are retained when changing AutoField to BigAutoField.
+        Test that indexes defined in Meta.indexes are retained when changing AutoField to BigAutoField.
         This exercises the special AutoField/BigAutoField restoration path in _alter_field
         which restores ALL indexes on ALL fields, not just the altered field.
         Runs with both split and combined migration contexts.
 
         KNOWN BUG: This test currently fails because the AutoField/BigAutoField special
         handling block only restores indexes defined via db_index=True and then breaks
-        out of the loop, skipping the subsequent code that restores indexes defined in _meta.indexes.
+        out of the loop, skipping the subsequent code that restores indexes defined in Meta.indexes.
         The fix would require the AutoField block to also iterate through Meta.indexes
         or to not break early, allowing the subsequent restoration code to run.
         """
@@ -1225,7 +1225,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     result.constraints,
                     expected_columns={'a', 'b'},
                     error_msg=(
-                        f"Index on ('a', 'b') from _meta.indexes was not recreated after AutoField to BigAutoField change "
+                        f"Index on ('a', 'b') from Meta.indexes was not recreated after AutoField to BigAutoField change "
                         f"({self._get_context_description(use_single_context)}). "
                         f"Expected index to be restored via AutoField/BigAutoField special restoration path."
                     ),
@@ -1233,8 +1233,8 @@ class TestMetaIndexesRetained(TransactionTestCase):
 
     def test_pk_type_change_preserves_indexes(self):
         """
-        Test that indexes defined in _meta.indexes are retained when changing primary key type.
-        This tests the primary key restoration path alongside the restoration of indexes from _meta.indexes.
+        Test that indexes defined in Meta.indexes are retained when changing primary key type.
+        This tests the primary key restoration path alongside the restoration of indexes from Meta.indexes.
         Runs with both split and combined migration contexts.
         """
         for use_single_context in [False, True]:
@@ -1284,12 +1284,12 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     f"Primary key was not restored ({self._get_context_description(use_single_context)})."
                 )
 
-                # Verify index from _meta.indexes including PK column was restored
+                # Verify index from Meta.indexes including PK column was restored
                 self._assert_index_exists(
                     result.constraints,
                     expected_columns={'id', 'a'},
                     error_msg=(
-                        f"Index on ('id', 'a') from _meta.indexes was not recreated after PK type change "
+                        f"Index on ('id', 'a') from Meta.indexes was not recreated after PK type change "
                         f"({self._get_context_description(use_single_context)}). "
                         f"Expected index containing PK column to be restored."
                     ),
