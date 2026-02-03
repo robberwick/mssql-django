@@ -1231,6 +1231,59 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     ),
                 )
 
+    def test_autofield_to_bigautofield_with_other_db_index_field(self):
+        """
+        Test that changing AutoField to BigAutoField fails when another field has db_index=True.
+        """
+        # Only test the combined context case where the bug manifests
+        for use_single_migration in [False, True]:
+            suffix = '_combined' if use_single_migration else '_split'
+            model_name = f'TestAutoDbIndex{suffix}'
+
+            operations_a = [
+                migrations.CreateModel(
+                    name=model_name,
+                    fields=[
+                        ('id', models.AutoField(primary_key=True)),
+                        ('name', models.CharField(max_length=100, db_index=True)),
+                        ('other', models.CharField(max_length=100)),
+                    ],
+                ),
+            ]
+
+            operations_b = [
+                migrations.AlterField(
+                    model_name=model_name.lower(),
+                    name='id',
+                    field=models.BigAutoField(primary_key=True),
+                ),
+            ]
+
+            # The bug causes a duplicate index error - catch it explicitly
+            # to prevent leaving the database connection in a broken state
+            conn = django.db.connections[django.db.DEFAULT_DB_ALIAS]
+            try:
+                with self.assertRaises(ProgrammingError) as cm:
+                    self._run_migration_test(
+                        operations_a=operations_a,
+                        operations_b=operations_b,
+                        migration_name_prefix='test_auto_dbindex',
+                        model_name=model_name,
+                        use_single_migration=use_single_migration,
+                    )
+
+                # Verify it's the specific duplicate index error we expect
+                self.assertIn(
+                    'already exists',
+                    str(cm.exception),
+                    f"Expected 'already exists' error for duplicate index, got: {cm.exception}"
+                )
+            finally:
+                # Reset the connection after the database error - pyodbc connections can be
+                # left in a corrupted state after certain errors.
+                # Setting connection to None forces Django to create a fresh connection.
+                conn.connection = None
+
     def test_pk_type_change_preserves_indexes(self):
         """
         Test that indexes defined in Meta.indexes are retained when changing primary key type.
