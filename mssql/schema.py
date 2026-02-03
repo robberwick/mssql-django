@@ -802,7 +802,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             old_field.column == new_field.column  # column rename is handled separately above
         ):
             # --------------------------------------------------------------------------------
-            # Single-field unique constraints
+            # restore single-field unique constraints
             # --------------------------------------------------------------------------------
             # If the field had unique=True and still does, recreate the constraint.
             # Note: Nullable unique constraints use filtered indexes (ANSI NULL behavior).
@@ -823,7 +823,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                 self._delete_deferred_unique_indexes_for_field(old_field)
             else:
                 # --------------------------------------------------------------------------------
-                # unique_together constraints
+                # Restore unique_together constraints
                 # --------------------------------------------------------------------------------
                 # If the field is NOT unique itself but IS part of unique_together,
                 # restore those multi-field unique constraints as filtered indexes.
