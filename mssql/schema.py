@@ -421,10 +421,17 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         #
         #
         # KNOWN BUGS/LIMITATIONS:
-        #   1. AutoField Bug: AutoField special handling restores db_index fields but
-        #      then breaks early, skipping Meta.indexes restoration. This means indexes
-        #      defined in Meta.indexes containing an AutoField/BigAutoField are NOT restored.
-        #      Test: test_autofield_type_change_preserves_indexes (marked @expectedFailure)
+        #   1. AutoField Bugs:
+        #      * AutoField special handling restores db_index fields but
+        #        then breaks early, skipping Meta.indexes restoration. This means indexes
+        #        defined in Meta.indexes containing an AutoField/BigAutoField are NOT restored.
+        #        Test: test_autofield_type_change_preserves_indexes (marked @expectedFailure)
+        #      * Autofield special handling of db_index fields does not deduplicate against
+        #        actions in deferred_sql or post_actions. This can result in attempts to create
+        #        duplicate indexes in some cases.
+        #        Test: test_autofield_to_bigautofield_with_other_db_index_field (marked @expectedFailure)
+        #        https://github.com/microsoft/mssql-django/issues/491
+        #
         #
         #   2. index_together Limitation: Only restored when field does NOT have
         #      db_index=True (it's in an else block). If a field has both db_index=True
