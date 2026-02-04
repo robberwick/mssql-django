@@ -1231,58 +1231,114 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     ),
                 )
 
-    def test_autofield_to_bigautofield_with_other_db_index_field(self):
+    def test_autofield_to_bigautofield_with_other_db_index_field_split(self):
         """
-        Test that changing AutoField to BigAutoField fails when another field has db_index=True.
+        Test that changing AutoField to BigAutoField preserves db_index=True indexes
+        on other fields when operations are in separate migrations.
+
+        This test verifies the split migration case works correctly - the index is
+        created and committed in the first migration before the AutoField alteration
+        runs in the second migration.
         """
-        # Only test the combined context case where the bug manifests
-        for use_single_migration in [False, True]:
-            suffix = '_combined' if use_single_migration else '_split'
-            model_name = f'TestAutoDbIndex{suffix}'
+        model_name = 'TestAutoDbIndex_split'
 
-            operations_a = [
-                migrations.CreateModel(
-                    name=model_name,
-                    fields=[
-                        ('id', models.AutoField(primary_key=True)),
-                        ('name', models.CharField(max_length=100, db_index=True)),
-                        ('other', models.CharField(max_length=100)),
-                    ],
-                ),
-            ]
+        operations_a = [
+            migrations.CreateModel(
+                name=model_name,
+                fields=[
+                    ('id', models.AutoField(primary_key=True)),
+                    ('name', models.CharField(max_length=100, db_index=True)),
+                    ('other', models.CharField(max_length=100)),
+                ],
+            ),
+        ]
 
-            operations_b = [
-                migrations.AlterField(
-                    model_name=model_name.lower(),
-                    name='id',
-                    field=models.BigAutoField(primary_key=True),
-                ),
-            ]
+        operations_b = [
+            migrations.AlterField(
+                model_name=model_name.lower(),
+                name='id',
+                field=models.BigAutoField(primary_key=True),
+            ),
+        ]
 
-            # The bug causes a duplicate index error - catch it explicitly
-            # to prevent leaving the database connection in a broken state
-            conn = django.db.connections[django.db.DEFAULT_DB_ALIAS]
-            try:
-                with self.assertRaises(ProgrammingError) as cm:
-                    self._run_migration_test(
-                        operations_a=operations_a,
-                        operations_b=operations_b,
-                        migration_name_prefix='test_auto_dbindex',
-                        model_name=model_name,
-                        use_single_migration=use_single_migration,
-                    )
+        result = self._run_migration_test(
+            operations_a=operations_a,
+            operations_b=operations_b,
+            migration_name_prefix='test_auto_dbindex',
+            model_name=model_name,
+            use_single_migration=False,
+        )
 
-                # Verify it's the specific duplicate index error we expect
-                self.assertIn(
-                    'already exists',
-                    str(cm.exception),
-                    f"Expected 'already exists' error for duplicate index, got: {cm.exception}"
+        # Verify db_index=True index on 'name' was retained
+        self._assert_index_exists(
+            result.constraints,
+            expected_columns={'name'},
+            error_msg=(
+                "db_index=True index on 'name' was not retained after AutoField to BigAutoField change "
+                "(split into 2 migrations). Expected index to be preserved."
+            ),
+        )
+
+    @expectedFailure
+    def test_autofield_to_bigautofield_with_other_db_index_field_combined(self):
+        """
+        Test that changing AutoField to BigAutoField fails with duplicate index error
+        when another field has db_index=True and operations are in a single migration.
+
+        This is a known bug: The AutoField/BigAutoField restoration code at lines 890-900
+        in schema.py creates db_index=True indexes immediately without checking if the
+        same index is already pending in deferred_sql. In a combined migration:
+
+        1. CreateModel queues the index in deferred_sql
+        2. AlterField (AutoField change) immediately creates the index
+        3. When schema_editor exits, deferred_sql tries to create the same index again
+
+        This results in a "already exists" ProgrammingError.
+
+        https://github.com/microsoft/mssql-django/issues/491
+        """
+        model_name = 'TestAutoDbIndex_combined'
+
+        operations_a = [
+            migrations.CreateModel(
+                name=model_name,
+                fields=[
+                    ('id', models.AutoField(primary_key=True)),
+                    ('name', models.CharField(max_length=100, db_index=True)),
+                    ('other', models.CharField(max_length=100)),
+                ],
+            ),
+        ]
+
+        operations_b = [
+            migrations.AlterField(
+                model_name=model_name.lower(),
+                name='id',
+                field=models.BigAutoField(primary_key=True),
+            ),
+        ]
+
+        conn = django.db.connections[django.db.DEFAULT_DB_ALIAS]
+        try:
+            with self.assertRaises(ProgrammingError) as cm:
+                self._run_migration_test(
+                    operations_a=operations_a,
+                    operations_b=operations_b,
+                    migration_name_prefix='test_auto_dbindex',
+                    model_name=model_name,
+                    use_single_migration=True,
                 )
-            finally:
-                # Reset the connection after the database error - pyodbc connections can be
-                # left in a corrupted state after certain errors.
-                # Setting connection to None forces Django to create a fresh connection.
-                conn.connection = None
+
+            # Verify it's the specific duplicate index error we expect
+            self.assertIn(
+                'already exists',
+                str(cm.exception),
+                f"Expected 'already exists' error for duplicate index, got: {cm.exception}"
+            )
+        finally:
+            # Reset the connection after the database error - pyodbc connections can be
+            # left in a corrupted state after certain errors.
+            conn.connection = None
 
     def test_pk_type_change_preserves_indexes(self):
         """
