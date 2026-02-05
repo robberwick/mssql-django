@@ -1170,19 +1170,12 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     ),
                 )
 
-    @expectedFailure
     def test_autofield_type_change_preserves_indexes(self):
         """
         Test that indexes defined in Meta.indexes are retained when changing AutoField to BigAutoField.
-        This exercises the special AutoField/BigAutoField restoration path in _alter_field
+        This exercises the AutoField/BigAutoField restoration path in _alter_field
         which restores ALL indexes on ALL fields, not just the altered field.
-        Runs with both split and combined migrations
-
-        KNOWN BUG: This test currently fails because the AutoField/BigAutoField special
-        handling block only restores indexes defined via db_index=True and then breaks
-        out of the loop, skipping the subsequent code that restores indexes defined in Meta.indexes.
-        The fix would require the AutoField block to also iterate through Meta.indexes
-        or to not break early, allowing the subsequent restoration code to run.
+        Runs with both split and combined migrations.
         """
         for use_single_migration in [False, True]:
 
@@ -1279,23 +1272,14 @@ class TestMetaIndexesRetained(TransactionTestCase):
             ),
         )
 
-    @expectedFailure
     def test_autofield_to_bigautofield_with_other_db_index_field_combined(self):
         """
-        Test that changing AutoField to BigAutoField fails with duplicate index error
-        when another field has db_index=True and operations are in a single migration.
+        Test that changing AutoField to BigAutoField preserves db_index=True indexes
+        on other fields when operations are in a single (combined) migration.
 
-        This is a known bug: The AutoField/BigAutoField restoration code at lines 890-900
-        in schema.py creates db_index=True indexes immediately without checking if the
-        same index is already pending in deferred_sql. In a combined migration:
-
-        1. CreateModel queues the index in deferred_sql
-        2. AlterField (AutoField change) immediately creates the index
-        3. When schema_editor exits, deferred_sql tries to create the same index again
-
-        This results in a "already exists" ProgrammingError.
-
-        https://github.com/microsoft/mssql-django/issues/491
+        This tests that the deduplication logic in _alter_field works correctly:
+        when CreateModel queues a db_index in deferred_sql and the AutoField
+        restoration code runs, it should skip creating duplicate indexes.
         """
         model_name = 'TestAutoDbIndex_combined'
 
@@ -1318,27 +1302,84 @@ class TestMetaIndexesRetained(TransactionTestCase):
             ),
         ]
 
-        conn = django.db.connections[django.db.DEFAULT_DB_ALIAS]
-        try:
-            with self.assertRaises(ProgrammingError) as cm:
-                self._run_migration_test(
+        result = self._run_migration_test(
+            operations_a=operations_a,
+            operations_b=operations_b,
+            migration_name_prefix='test_auto_dbindex',
+            model_name=model_name,
+            use_single_migration=True,
+        )
+
+        # Verify db_index=True index on 'name' was retained
+        self._assert_index_exists(
+            result.constraints,
+            expected_columns={'name'},
+            error_msg=(
+                "db_index=True index on 'name' was not retained after AutoField to BigAutoField change "
+                "(combined into 1 migration). Expected index to be preserved."
+            ),
+        )
+
+    @skipIf(VERSION >= (5, 1), "index_together is removed in Django 5.1+")
+    def test_index_together_retained_after_autofield_change(self):
+        """
+        Test that index_together indexes are retained when changing AutoField to BigAutoField.
+
+        This tests the index_together restoration path in _alter_field for AutoField changes.
+        Since AutoField changes drop ALL indexes on the table, the restoration code must
+        also restore ALL index_together indexes, not just those involving the altered field.
+
+        Note: index_together is deprecated in Django 4.2 and removed in Django 5.1+.
+        This test only runs on Django < 5.1.
+        """
+        for use_single_migration in [False, True]:
+
+            with self.subTest(single_migration=use_single_migration):
+                suffix = '_combined' if use_single_migration else '_split'
+                model_name = f'TestIdxTogetherAuto{suffix}'
+
+                # Create model with index_together using the deprecated Meta option
+                # We need to use a raw SQL approach or create the model dynamically
+                # since Django's migration system handles index_together
+                operations_a = [
+                    migrations.CreateModel(
+                        name=model_name,
+                        fields=[
+                            ('id', models.AutoField(primary_key=True)),
+                            ('a', models.CharField(max_length=20)),
+                            ('b', models.CharField(max_length=20)),
+                        ],
+                        options={
+                            'index_together': {('a', 'b')},
+                        },
+                    ),
+                ]
+
+                operations_b = [
+                    migrations.AlterField(
+                        model_name=model_name.lower(),
+                        name='id',
+                        field=models.BigAutoField(primary_key=True),
+                    ),
+                ]
+
+                result = self._run_migration_test(
                     operations_a=operations_a,
                     operations_b=operations_b,
-                    migration_name_prefix='test_auto_dbindex',
+                    migration_name_prefix='test_idx_together_auto',
                     model_name=model_name,
-                    use_single_migration=True,
+                    use_single_migration=use_single_migration,
                 )
 
-            # Verify it's the specific duplicate index error we expect
-            self.assertIn(
-                'already exists',
-                str(cm.exception),
-                f"Expected 'already exists' error for duplicate index, got: {cm.exception}"
-            )
-        finally:
-            # Reset the connection after the database error - pyodbc connections can be
-            # left in a corrupted state after certain errors.
-            conn.connection = None
+                self._assert_index_exists(
+                    result.constraints,
+                    expected_columns={'a', 'b'},
+                    error_msg=(
+                        f"index_together index on ('a', 'b') was not recreated after AutoField to BigAutoField change "
+                        f"({self._get_context_description(use_single_migration)}). "
+                        f"Expected index to be restored via AutoField restoration path."
+                    ),
+                )
 
     def test_pk_type_change_preserves_indexes(self):
         """
