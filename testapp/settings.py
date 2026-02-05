@@ -384,3 +384,10 @@ REGEX_TESTS = [
     'model_fields.test_jsonfield.TestQuerying.test_key_iregex',
     'model_fields.test_jsonfield.TestQuerying.test_key_regex',
 ]
+
+# Import local settings overrides if available
+# This allows developers to customize database settings without modifying tracked files
+try:
+    from .settings_local import *
+except ImportError:
+    pass

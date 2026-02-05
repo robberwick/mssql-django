@@ -611,6 +611,168 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     ),
                 )
 
+    def test_db_index_retained_after_rename_and_type_change(self):
+        """
+        Test that db_index=True indexes are retained when a field's db_column is changed
+        AND has its type changed in the same AlterField operation.
+
+        Runs with both split and combined migrations
+        """
+        for use_single_migration in [False, True]:
+
+            with self.subTest(single_migration=use_single_migration):
+                suffix = '_combined' if use_single_migration else '_split'
+                model_name = f'TestDbIdxRenameType{suffix}'
+
+                operations_a = [
+                    migrations.CreateModel(
+                        name=model_name,
+                        fields=[
+                            ('id', models.AutoField(primary_key=True)),
+                            ('a', models.CharField(max_length=20, db_index=True, db_column='col_a')),
+                            ('b', models.CharField(max_length=20)),
+                        ],
+                    ),
+                ]
+
+                operations_b = [
+                    # Change db_column AND type in single AlterField
+                    migrations.AlterField(
+                        model_name=model_name.lower(),
+                        name='a',
+                        field=models.CharField(max_length=40, db_index=True, db_column='col_a_renamed'),
+                    ),
+                ]
+
+                result = self._run_migration_test(
+                    operations_a=operations_a,
+                    operations_b=operations_b,
+                    migration_name_prefix='test_dbidx_rename_type',
+                    model_name=model_name,
+                    use_single_migration=use_single_migration,
+                )
+
+                self._assert_index_exists(
+                    result.constraints,
+                    expected_columns={'col_a_renamed'},
+                    error_msg=(
+                        f"db_index=True index on 'col_a_renamed' was not found after column rename + type change "
+                        f"({self._get_context_description(use_single_migration)}). "
+                        f"Expected index to be retained when both column rename and type change occur in same AlterField."
+                    ),
+                )
+
+    def test_unique_retained_after_rename_and_type_change(self):
+        """
+        Test that unique=True constraints are retained when a field's db_column is changed
+        AND has its type changed in the same AlterField operation.
+
+        Runs with both split and combined migrations
+        """
+        for use_single_migration in [False, True]:
+
+            with self.subTest(single_migration=use_single_migration):
+                suffix = '_combined' if use_single_migration else '_split'
+                model_name = f'TestUniqueRenameType{suffix}'
+
+                operations_a = [
+                    migrations.CreateModel(
+                        name=model_name,
+                        fields=[
+                            ('id', models.AutoField(primary_key=True)),
+                            ('a', models.CharField(max_length=20, unique=True, db_column='col_a')),
+                            ('b', models.CharField(max_length=20)),
+                        ],
+                    ),
+                ]
+
+                operations_b = [
+                    # Change db_column AND type in single AlterField
+                    migrations.AlterField(
+                        model_name=model_name.lower(),
+                        name='a',
+                        field=models.CharField(max_length=40, unique=True, db_column='col_a_renamed'),
+                    ),
+                ]
+
+                result = self._run_migration_test(
+                    operations_a=operations_a,
+                    operations_b=operations_b,
+                    migration_name_prefix='test_uniq_rename_type',
+                    model_name=model_name,
+                    use_single_migration=use_single_migration,
+                )
+
+                # Check for unique constraint on the renamed column
+                unique_constraints = [
+                    info for info in result.constraints.values()
+                    if info.get('unique') and set(info['columns']) == {'col_a_renamed'}
+                ]
+                self.assertTrue(
+                    len(unique_constraints) > 0,
+                    f"unique=True constraint on 'col_a_renamed' was not found after column rename + type change "
+                    f"({self._get_context_description(use_single_migration)}). "
+                    f"Expected unique constraint to be retained."
+                )
+
+    @expectedFailure
+    @skipIf(VERSION >= (5, 1), "unique_together is deprecated in Django 5.1+")
+    def test_unique_together_retained_after_rename_and_type_change(self):
+        """
+        Test that unique_together constraints are retained when a field's db_column is changed
+        AND has its type changed in the same AlterField operation.
+
+        Runs with both split and combined migrations
+        """
+        for use_single_migration in [False, True]:
+
+            with self.subTest(single_migration=use_single_migration):
+                suffix = '_combined' if use_single_migration else '_split'
+                model_name = f'TestUniqTogetherRenameType{suffix}'
+
+                operations_a = [
+                    migrations.CreateModel(
+                        name=model_name,
+                        fields=[
+                            ('id', models.AutoField(primary_key=True)),
+                            ('a', models.CharField(max_length=20, db_column='col_a')),
+                            ('b', models.CharField(max_length=20)),
+                        ],
+                        options={
+                            'unique_together': {('a', 'b')},
+                        },
+                    ),
+                ]
+
+                operations_b = [
+                    # Change db_column AND type in single AlterField
+                    migrations.AlterField(
+                        model_name=model_name.lower(),
+                        name='a',
+                        field=models.CharField(max_length=40, db_column='col_a_renamed'),
+                    ),
+                ]
+
+                result = self._run_migration_test(
+                    operations_a=operations_a,
+                    operations_b=operations_b,
+                    migration_name_prefix='test_uniqtog_rename_type',
+                    model_name=model_name,
+                    use_single_migration=use_single_migration,
+                )
+
+                # Check for unique_together constraint on ('col_a_renamed', 'b')
+                unique_constraints = [
+                    info for info in result.constraints.values()
+                    if info.get('unique') and set(info['columns']) == {'col_a_renamed', 'b'}
+                ]
+                self.assertTrue(
+                    len(unique_constraints) > 0,
+                    f"unique_together constraint on ('col_a_renamed', 'b') was not found after column rename + type change "
+                    f"({self._get_context_description(use_single_migration)}). "
+                    f"Expected unique_together to be retained."
+                )
+
     @expectedFailure
     def test_index_from_meta_indexes_retained_after_rename_and_nullability_change(self):
         """
