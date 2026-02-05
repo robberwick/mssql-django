@@ -885,25 +885,6 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                     break
 
             # --------------------------------------------------------------------------------
-            # AutoField/BigAutoField special handling - single-field indexes
-            # --------------------------------------------------------------------------------
-            # When altering an AutoField or BigAutoField, restore ALL single-field indexes
-            # (db_index=True) across the entire model.
-            #
-            # KNOWN BUG: This block breaks early, preventing the restoration code below from running.
-            # This means that column indexes from Meta.indexes that contain an AutoField/BigAutoField are NOT restored.
-            # Test: test_autofield_type_change_preserves_indexes (marked @expectedFailure)
-            # --------------------------------------------------------------------------------
-            for t in (AutoField, BigAutoField):
-                if isinstance(old_field, t) or isinstance(new_field, t):
-                    for field in model._meta.fields:
-                        if field.db_index:
-                            self.execute(
-                                self._create_index_sql(model, [field])
-                            )
-                    break
-
-            # --------------------------------------------------------------------------------
             # db_index, index_together, and Meta.indexes
             # --------------------------------------------------------------------------------
             # Build lists of indexes to restore, then restore them with deduplication.
@@ -914,32 +895,43 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             #
             #   - Deduplication: Check against deferred_sql and post_actions to prevent
             #     double creation when both DROP paths triggered
+            #
+            # AutoField/BigAutoField changes are special: SQL Server requires dropping ALL
+            # indexes on the table to change an IDENTITY column, so we must restore ALL
+            # indexes (not just those involving the altered field).
             # --------------------------------------------------------------------------------
             index_columns = []
             indexes_to_restore = []
 
+            # Detect if this is an AutoField/BigAutoField type change
+            is_autofield_change = (
+                isinstance(old_field, (AutoField, BigAutoField)) or
+                isinstance(new_field, (AutoField, BigAutoField))
+            )
+
             # ------------------------------------------------------------------------------------
             # Collect db_index=True indexes
             # ------------------------------------------------------------------------------------
-            if old_field.db_index and new_field.db_index:
+            if is_autofield_change:
+                # AutoField changes drop ALL indexes - restore ALL db_index=True fields
+                for field in model._meta.fields:
+                    if field.db_index:
+                        index_columns.append([field])
+            elif old_field.db_index and new_field.db_index:
                 index_columns.append([old_field])
-            else:
-                # --------------------------------------------------------------------------------
-                # index_together (Django < 5.1 only)
-                # --------------------------------------------------------------------------------
-                # KNOWN LIMITATION: This is in an else block, so it only runs when the field
-                # does NOT have db_index=True. If a field has both db_index=True AND is in
-                # index_together, only the single-field index is restored here.
-                # Note: index_together is deprecated and removed in Django 5.1+.
-                # --------------------------------------------------------------------------------
-                if django_version < (5, 1):
-                   # Get the field objects for each field name in the index_together.
-                   for fields in model._meta.index_together:
-                      # If the old field's column is among the columns for this index,
-                      # add this set of columns to index_columns for later index recreation.
-                      columns = [model._meta.get_field(field) for field in fields]
-                      if old_field.column in [c.column for c in columns]:
-                         index_columns.append(columns)
+
+            # --------------------------------------------------------------------------------
+            # index_together (Django < 5.1 only)
+            # --------------------------------------------------------------------------------
+            # Note: index_together is deprecated and removed in Django 5.1+.
+            # For AutoField changes, restore ALL index_together indexes.
+            # For other changes, only restore indexes involving the altered field.
+            # --------------------------------------------------------------------------------
+            if django_version < (5, 1):
+                for fields in model._meta.index_together:
+                    columns = [model._meta.get_field(field) for field in fields]
+                    if is_autofield_change or old_field.column in [c.column for c in columns]:
+                        index_columns.append(columns)
 
             # --------------------------------------------------------------------------------
             # Execute restoration: db_index and index_together
@@ -960,14 +952,16 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             # --------------------------------------------------------------------------------
             # Collect Index objects (not just field lists) to preserve explicit names
             # and other index attributes when calling index.create_sql().
+            # For AutoField changes, restore ALL Meta.indexes.
+            # For other changes, only restore indexes involving the altered field.
             # --------------------------------------------------------------------------------
             for index in model._meta.indexes:
                 # Get the field objects for this index
                 index_fields = [model._meta.get_field(field_name) for field_name in index.fields]
                 index_columns_list = [field.column for field in index_fields]
 
-                # If the altered field's column is part of this index, mark for restoration
-                if old_field.column in index_columns_list:
+                # Restore if: AutoField change (all indexes dropped) OR field is in this index
+                if is_autofield_change or old_field.column in index_columns_list:
                     indexes_to_restore.append(index)  # Store the Index object, not field list
 
             # --------------------------------------------------------------------------------
