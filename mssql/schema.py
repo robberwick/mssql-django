@@ -784,12 +784,6 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         #   - Only if type changed OR nullability changed
         #   - Only if column was NOT renamed (rename is handled separately)
         #
-        # DEDUPLICATION:
-        #   When both type AND nullability change, both DROP paths execute.
-        #   To prevent double restoration, each index creation checks against:
-        #     - deferred_sql: Django's queue of deferred SQL statements
-        #     - post_actions: other_actions returned by _alter_column_type_sql()
-        #   See inline dedup comments below for implementation details.
 
         # Restore indexes & unique constraints deleted above, SQL Server requires explicit restoration
         if (old_type != new_type or (old_field.null != new_field.null)) and (
