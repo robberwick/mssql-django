@@ -783,6 +783,9 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         # WHEN THIS RUNS:
         #   - Only if type changed OR nullability changed
         #   - Only if column was NOT renamed (rename is handled separately)
+        # Test:
+        #   - test_index_from_meta_indexes_retained_after_rename_and_type_change (@expectedFailure)
+        #   - test_index_from_meta_indexes_retained_after_rename_and_nullability_change (@expectedFailure)
         #
 
         # Restore indexes & unique constraints deleted above, SQL Server requires explicit restoration
