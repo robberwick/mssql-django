@@ -421,28 +421,22 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         #
         #
         # KNOWN BUGS/LIMITATIONS:
-        #   1. AutoField Bugs:
-        #      * AutoField special handling restores db_index fields but
-        #        then breaks early, skipping Meta.indexes restoration. This means indexes
-        #        defined in Meta.indexes containing an AutoField/BigAutoField are NOT restored.
-        #        Test: test_autofield_type_change_preserves_indexes (marked @expectedFailure)
-        #      * Autofield special handling of db_index fields does not deduplicate against
-        #        actions in deferred_sql or post_actions. This can result in attempts to create
-        #        duplicate indexes in some cases.
-        #        Test: test_autofield_to_bigautofield_with_other_db_index_field (marked @expectedFailure)
-        #        https://github.com/microsoft/mssql-django/issues/491
+        #   1. Rename + alter in same migration: When a field is renamed (via RenameField)
+        #      AND has a type or nullability change (via AlterField) in the same migration,
+        #      indexes from Meta.indexes are not restored. The _delete_indexes() method
+        #      fails with FieldDoesNotExist because it looks up the index field by the
+        #      old field name, but RenameField has already updated the model state.
+        #      Tests (marked @expectedFailure):
+        #        - test_index_from_meta_indexes_retained_after_rename_and_type_change
+        #        - test_index_from_meta_indexes_retained_after_rename_and_nullability_change
         #
-        #
-        #   2. index_together Limitation: Only restored when field does NOT have
-        #      db_index=True (it's in an else block). If a field has both db_index=True
-        #      AND is in index_together, only the db_index=True index is restored.
-        #      Note: index_together is deprecated and removed in Django 5.1+.
-        #
-        #   3. Rename & type/nullability change: Indexes from Meta.indexes are not
-        #      restored if a field is renamed AND has a type or nullability change.
-        #      Test: test_index_from_meta_indexes_retained_after_rename_and_type_change
-        #      and test_index_from_meta_indexes_retained_after_rename_and_nullability_change
-        #      (both currently @expectedFailure)
+        #   2. unique_together + unique=True: When a field has BOTH unique=True AND
+        #      participates in unique_together, only the single-field unique constraint
+        #      is restored after field alteration. The unique_together constraint is NOT
+        #      restored because the restoration code is in an 'else' block that only
+        #      executes when the field does NOT have unique=True.
+        #      Test (marked @expectedFailure):
+        #        - test_unique_together_retained_when_field_also_has_unique_true
 
         # ============================================================================
         # 1. Constraint and special case handling
