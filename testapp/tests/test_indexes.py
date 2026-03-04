@@ -1726,15 +1726,9 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     ),
                 )
 
-    @expectedFailure
     def test_unique_together_retained_when_field_also_has_unique_true(self):
         """
         Test that unique_together constraints are retained when a field with unique=True is altered.
-
-        KNOWN BUG: When a field has BOTH unique=True AND participates in unique_together,
-        only the single-field unique constraint is restored after field alteration.
-        The unique_together constraint is NOT restored because the unique_together restoration is in an
-        'else' block that only executes when the field does NOT have unique=True.
 
         Runs with both split and combined migrations
         """

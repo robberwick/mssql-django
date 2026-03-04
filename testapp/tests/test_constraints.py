@@ -9,7 +9,7 @@ from django.db.utils import IntegrityError
 from django.test import TestCase, TransactionTestCase, skipUnlessDBFeature
 
 from mssql.base import DatabaseWrapper
-from . import get_constraint_names_where
+from . import get_constraint_names_where, get_constraints
 from ..models import (
     Author,
     Editor,
@@ -178,6 +178,80 @@ class TestRenameManyToManyField(TestCase):
         with self.assertRaises(IntegrityError, msg='Through model fails to enforce uniqueness after m2m rename'):
             # This should fail due to the unique_together because (thing1, other1) is already in the through table
             ThroughModel.objects.create(testrenamemanytomanyfieldmodel=thing1, m2mothermodel=other1)
+
+
+class TestUniqueTogetherWithUniqueField(TestCase):
+    """
+    Regression test for https://github.com/microsoft/mssql-django/issues/494
+
+    When a field has both unique=True AND participates in a unique_together constraint,
+    altering that field should preserve BOTH the single-field unique constraint AND the
+    unique_together constraint.
+    """
+
+    def test_unique_together_restored_after_alter_field_with_unique(self):
+        app_label = 'test_unique_together_with_unique_field'
+        operations = [
+            migrations.CreateModel(
+                name='TestModel',
+                fields=[
+                    ('id', models.AutoField(primary_key=True)),
+                    ('a', models.CharField(max_length=20, unique=True)),
+                    ('b', models.CharField(max_length=20)),
+                ],
+            ),
+            migrations.AlterUniqueTogether(
+                name='testmodel',
+                unique_together={('a', 'b')},
+            ),
+            # Alter field `a` which has unique=True AND participates in unique_together
+            migrations.AlterField(
+                model_name='testmodel',
+                name='a',
+                field=models.CharField(max_length=40, unique=True),  # changed from max_length=20
+            ),
+        ]
+
+        project_state = ProjectState()
+        new_state = project_state.clone()
+        migration = migrations.Migration('name', app_label)
+        migration.operations = operations
+
+        connection = connections['default']
+        with connection.schema_editor(atomic=True) as editor:
+            for operation in migration.operations:
+                operation.state_forwards(app_label, new_state)
+                operation.database_forwards(app_label, editor, project_state, new_state)
+                project_state = new_state.clone()
+
+        table_name = new_state.apps.get_model(app_label, 'TestModel')._meta.db_table
+        constraints = get_constraints(table_name=table_name)
+
+        # Find all unique constraints/indexes involving column `a`
+        unique_on_a_only = [
+            name
+            for name, details in constraints.items()
+            if details.get('unique') and set(details['columns']) == {'a'}
+        ]
+        unique_on_a_and_b = [
+            name
+            for name, details in constraints.items()
+            if details.get('unique') and set(details['columns']) == {'a', 'b'}
+        ]
+
+        self.assertEqual(
+            len(unique_on_a_only),
+            1,
+            'Expected exactly 1 unique constraint on column `a` after AlterField, '
+            'found %d: %s' % (len(unique_on_a_only), unique_on_a_only),
+        )
+        self.assertEqual(
+            len(unique_on_a_and_b),
+            1,
+            'Expected exactly 1 unique_together constraint on (a, b) after AlterField, '
+            'found %d — unique_together was lost when field also has unique=True (issue #494): %s'
+            % (len(unique_on_a_and_b), unique_on_a_and_b),
+        )
 
 
 class TestUniqueConstraints(TransactionTestCase):
