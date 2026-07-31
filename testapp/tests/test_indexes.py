@@ -1793,6 +1793,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     f"({self._get_context_description(use_single_migration)})."
                 )
 
+
     @skipIf(VERSION >= (5, 1), "index_together removed in Django 5.1")
     def test_index_together_retained_after_type_change(self):
         """

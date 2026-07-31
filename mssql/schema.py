@@ -999,6 +999,8 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         for old_rel, new_rel in rels_to_update:
             rel_db_params = new_rel.field.db_parameters(connection=self.connection)
             rel_type = rel_db_params['type']
+            related_table = old_rel.related_model._meta.db_table
+            related_column = old_rel.field.column
             if django_version >= (4, 2):
                 fragment, other_actions = self._alter_column_type_sql(
                     new_rel.related_model, old_rel.field, new_rel.field, rel_type, old_collation=None, new_collation=None
@@ -1007,11 +1009,28 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                 fragment, other_actions = self._alter_column_type_sql(
                     new_rel.related_model, old_rel.field, new_rel.field, rel_type
                 )
+            # Drop a PRIMARY KEY constraint tied to the related column first (shared-PK
+            # OneToOneField case): SQL Server refuses to alter a column that a PK
+            # constraint still references, and PK constraints aren't picked up by the
+            # index=True lookup below (see mssql/introspection.get_constraints).
+            related_pk_names = self._db_table_constraint_names(
+                related_table, [related_column], primary_key=True
+            )
+            if len(related_pk_names) > 1:
+                raise ValueError(
+                    "Found multiple primary key constraints on column %r of table %r; "
+                    "expected at most one." % (related_column, related_table)
+                )
+            for pk_name in related_pk_names:
+                self.execute(self._db_table_delete_constraint_sql(
+                    self.sql_delete_pk, related_table, pk_name))
             # Drop related_model indexes, so it can be altered
-            index_names = self._db_table_constraint_names(old_rel.related_model._meta.db_table, index=True)
+            index_names = self._db_table_constraint_names(
+                related_table, index=True, exclude=set(related_pk_names)
+            )
             for index_name in index_names:
                 self.execute(self._db_table_delete_constraint_sql(
-                    self.sql_delete_index, old_rel.related_model._meta.db_table, index_name))
+                    self.sql_delete_index, related_table, index_name))
             self.execute(
                 self.sql_alter_column % {
                     "table": self.quote_name(new_rel.related_model._meta.db_table),
@@ -1021,9 +1040,23 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             )
             for sql, params in other_actions:
                 self.execute(sql, params)
+            # Recreate the related PRIMARY KEY constraint if we dropped one above and
+            # the relation is still PK-backed on both sides.
+            if related_pk_names and old_rel.field.primary_key and new_rel.field.primary_key:
+                self.execute(
+                    self.sql_create_pk % {
+                        "table": self.quote_name(new_rel.related_model._meta.db_table),
+                        "name": self.quote_name(
+                            self._create_index_name(
+                                new_rel.related_model._meta.db_table, [new_rel.field.column], suffix="_pk"
+                            )
+                        ),
+                        "columns": self.quote_name(new_rel.field.column),
+                    }
+                )
             # Restore related_model indexes
             for field in new_rel.related_model._meta.fields:
-                if field.db_index:
+                if self._field_should_be_indexed(new_rel.related_model, field):
                     self.execute(
                         self._create_index_sql(new_rel.related_model, [field])
                     )
