@@ -277,6 +277,27 @@ class TestMetaIndexesRetained(TransactionTestCase):
     def _get_context_description(self, use_single_migration: bool) -> str:
         return "combined single migration" if use_single_migration else "split into 2 migrations"
 
+    def _reset_connection_after_ddl_failure(self):
+        """
+        Recover the shared connection after intentionally triggering a fatal
+        SQL Server DDL error (e.g. error 5074/1913) inside a
+        ``schema_editor(atomic=True)`` block.
+
+        The error surfaces while the ``atomic()`` context manager is still
+        exiting (deferred_sql flush at ``__exit__`` time), so ``in_atomic_block``
+        is still ``True`` when the exception propagates. Django's
+        ``connection.close()`` only sets ``closed_in_transaction``/``needs_rollback``
+        in that state rather than actually dropping the stale handle, so a plain
+        ``close()`` is not enough to let subsequent tests reconnect. Reset the
+        atomic-transaction bookkeeping explicitly before closing.
+        """
+        conn = django.db.connections[django.db.DEFAULT_DB_ALIAS]
+        conn.close()
+        conn.in_atomic_block = False
+        conn.closed_in_transaction = False
+        conn.needs_rollback = False
+        conn.connection = None
+
     def test_index_from_meta_indexes_retained_after_type_change(self):
         """
         Test that indexes defined in Meta.indexes are retained when altering field type (max_length change).
