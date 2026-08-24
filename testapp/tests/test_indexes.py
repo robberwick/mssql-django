@@ -57,6 +57,19 @@ def _reset_connection_after_ddl_failure():
     conn.connection = None
 
 
+def _drop_regular_fk_pk_widening_fixture_tables():
+    """Remove tables left behind by a failed combined-migration regression."""
+    conn = django.db.connections[DEFAULT_DB_ALIAS]
+    existing_tables = set(conn.introspection.table_names())
+    for table_name in (
+        'regular_fk_pk_widening_migration_regularchild',
+        'regular_fk_pk_widening_migration_parent',
+    ):
+        if table_name in existing_tables:
+            with conn.cursor() as cursor:
+                cursor.execute('DROP TABLE %s' % conn.ops.quote_name(table_name))
+
+
 class TestIndexesRetained(TestCase):
     """
     Issue https://github.com/microsoft/mssql-django/issues/14
@@ -1988,6 +2001,59 @@ class TestPkWideningMigrations(TransactionTestCase):
                 MigrationExecutor(django.db.connections[DEFAULT_DB_ALIAS]).migrate([
                     ('pk_widening_migration', None),
                 ])
+
+
+class TestRegularFkPkWideningMigrations(TransactionTestCase):
+    def test_widening_recreates_foreignkey_index(self):
+        with self.modify_settings(
+            INSTALLED_APPS={
+                'append': 'testapp.tests.regular_fk_pk_widening_migration_app.apps.RegularFkPkWideningMigrationAppConfig',
+            }
+        ):
+            migration_succeeded = False
+            try:
+                connection = django.db.connections[DEFAULT_DB_ALIAS]
+                final_state = MigrationExecutor(connection).migrate([
+                    ('regular_fk_pk_widening_migration', '0001_combined_create_and_widen'),
+                ])
+                migration_succeeded = True
+
+                parent = final_state.apps.get_model('regular_fk_pk_widening_migration', 'Parent')
+                child = final_state.apps.get_model('regular_fk_pk_widening_migration', 'RegularChild')
+                parent_constraints = get_constraints(table_name=parent._meta.db_table)
+                child_constraints = get_constraints(table_name=child._meta.db_table)
+
+                self.assertTrue(any(
+                    info.get('primary_key') and set(info['columns']) == {'id'}
+                    for info in parent_constraints.values()
+                ))
+                self.assertTrue(any(
+                    info.get('foreign_key') and set(info['columns']) == {'parent_id'}
+                    for info in child_constraints.values()
+                ))
+                non_unique_parent_indexes = [
+                    info for info in child_constraints.values()
+                    if info.get('index') and not info.get('unique') and set(info['columns']) == {'parent_id'}
+                ]
+                self.assertEqual(len(non_unique_parent_indexes), 1)
+                self.assertFalse(any(
+                    info.get('unique') and set(info['columns']) == {'parent_id'}
+                    for info in child_constraints.values()
+                ))
+            except DatabaseError:
+                _reset_connection_after_ddl_failure()
+                raise
+            finally:
+                if migration_succeeded:
+                    try:
+                        MigrationExecutor(django.db.connections[DEFAULT_DB_ALIAS]).migrate([
+                            ('regular_fk_pk_widening_migration', None),
+                        ])
+                    except DatabaseError:
+                        _reset_connection_after_ddl_failure()
+                        _drop_regular_fk_pk_widening_fixture_tables()
+                else:
+                    _drop_regular_fk_pk_widening_fixture_tables()
 
 
 class TestAddAndAlterUniqueIndex(TestCase):
