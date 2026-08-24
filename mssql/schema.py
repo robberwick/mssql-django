@@ -1009,10 +1009,12 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                 fragment, other_actions = self._alter_column_type_sql(
                     new_rel.related_model, old_rel.field, new_rel.field, rel_type
                 )
-            # Drop a PRIMARY KEY constraint tied to the related column first (shared-PK
-            # OneToOneField case): SQL Server refuses to alter a column that a PK
-            # constraint still references, and PK constraints aren't picked up by the
-            # index=True lookup below (see mssql/introspection.get_constraints).
+            # Drop a PRIMARY KEY or UNIQUE CONSTRAINT tied to the related column first
+            # (shared-PK OneToOneField, and plain OneToOneField, cases respectively):
+            # SQL Server refuses to alter a column that such a constraint still
+            # references, and neither constraint kind is picked up by the index=True
+            # lookup below (see mssql/introspection.get_constraints) - both are
+            # CONSTRAINT-backed, not INDEX-backed, so their `index` flag is False.
             related_pk_names = self._db_table_constraint_names(
                 related_table, [related_column], primary_key=True
             )
@@ -1021,12 +1023,24 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                     "Found multiple primary key constraints on column %r of table %r; "
                     "expected at most one." % (related_column, related_table)
                 )
+            related_unique_constraint_names = self._db_table_constraint_names(
+                related_table, [related_column], unique_constraint=True
+            )
+            if len(related_unique_constraint_names) > 1:
+                raise ValueError(
+                    "Found multiple unique constraints on column %r of table %r; "
+                    "expected at most one." % (related_column, related_table)
+                )
             for pk_name in related_pk_names:
                 self.execute(self._db_table_delete_constraint_sql(
                     self.sql_delete_pk, related_table, pk_name))
+            for unique_name in related_unique_constraint_names:
+                self.execute(self._db_table_delete_constraint_sql(
+                    self.sql_delete_unique, related_table, unique_name))
             # Drop related_model indexes, so it can be altered
             index_names = self._db_table_constraint_names(
-                related_table, index=True, exclude=set(related_pk_names)
+                related_table, index=True,
+                exclude=set(related_pk_names) | set(related_unique_constraint_names),
             )
             for index_name in index_names:
                 self.execute(self._db_table_delete_constraint_sql(
@@ -1054,6 +1068,13 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                         "columns": self.quote_name(new_rel.field.column),
                     }
                 )
+            # Recreate the related UNIQUE CONSTRAINT if we dropped one above and the
+            # relation is still unique (plain, non-PK OneToOneField case).
+            if related_unique_constraint_names and new_rel.field.unique and not new_rel.field.primary_key:
+                if django_version >= (4, 0):
+                    self.execute(self._create_unique_sql(new_rel.related_model, [new_rel.field]))
+                else:
+                    self.execute(self._create_unique_sql(new_rel.related_model, [new_rel.field.column]))
             # Restore related_model indexes
             for field in new_rel.related_model._meta.fields:
                 if self._field_should_be_indexed(new_rel.related_model, field):

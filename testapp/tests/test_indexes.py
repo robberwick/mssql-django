@@ -1707,6 +1707,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
                 )
 
 
+
     def test_pk_widening_regular_foreignkey_behavior(self):
         """Widening a referenced PK preserves regular ForeignKey constraints and indexes."""
         for use_single_migration in [False, True]:
