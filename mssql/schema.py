@@ -1075,12 +1075,18 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                     self.execute(self._create_unique_sql(new_rel.related_model, [new_rel.field]))
                 else:
                     self.execute(self._create_unique_sql(new_rel.related_model, [new_rel.field.column]))
-            # Restore related_model indexes
+            # Restore related_model indexes.
             for field in new_rel.related_model._meta.fields:
                 if self._field_should_be_indexed(new_rel.related_model, field):
-                    self.execute(
-                        self._create_index_sql(new_rel.related_model, [field])
+                    create_index_sql_statement = self._create_index_sql(
+                        new_rel.related_model, [field]
                     )
+                    if create_index_sql_statement and (
+                        str(create_index_sql_statement)
+                        not in [str(sql) for sql in self.deferred_sql]
+                        + [str(statement[0]) for statement in other_actions]
+                    ):
+                        self.execute(create_index_sql_statement)
             # Restore unique_together clauses
             for field_names in new_rel.related_model._meta.unique_together:
                 columns = [new_rel.related_model._meta.get_field(field).column for field in field_names]
