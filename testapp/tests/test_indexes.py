@@ -1830,9 +1830,15 @@ class TestPkWideningMigrations(TransactionTestCase):
                 parent = final_state.apps.get_model('pk_widening_migration', 'Parent')
                 plain_child = final_state.apps.get_model('pk_widening_migration', 'PlainChild')
                 shared_child = final_state.apps.get_model('pk_widening_migration', 'SharedChild')
+                constrained_child = final_state.apps.get_model(
+                    'pk_widening_migration', 'ConstrainedChild'
+                )
                 parent_constraints = get_constraints(table_name=parent._meta.db_table)
                 plain_child_constraints = get_constraints(table_name=plain_child._meta.db_table)
                 shared_child_constraints = get_constraints(table_name=shared_child._meta.db_table)
+                constrained_child_constraints = get_constraints(
+                    table_name=constrained_child._meta.db_table
+                )
 
                 self.assertTrue(any(
                     info.get('unique') and set(info['columns']) == {'parent_id'}
@@ -1842,6 +1848,13 @@ class TestPkWideningMigrations(TransactionTestCase):
                     info.get('index') and set(info['columns']) == {'parent_id'}
                     for info in plain_child_constraints.values()
                 ))
+                self.assertEqual(
+                    sum(
+                        info.get('unique') and set(info['columns']) == {'parent_id'}
+                        for info in constrained_child_constraints.values()
+                    ),
+                    2,
+                )
                 self.assertTrue(any(
                     info.get('foreign_key') and set(info['columns']) == {'parent_id'}
                     for info in plain_child_constraints.values()

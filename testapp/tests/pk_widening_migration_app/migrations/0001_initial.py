@@ -27,6 +27,23 @@ class Migration(migrations.Migration):
             ],
         ),
         migrations.CreateModel(
+            name='ConstrainedChild',
+            fields=[
+                ('id', models.AutoField(primary_key=True)),
+                ('parent', models.OneToOneField(
+                    on_delete=django.db.models.deletion.CASCADE,
+                    to='pk_widening_migration.parent',
+                )),
+            ],
+            options={
+                'constraints': [
+                    models.UniqueConstraint(
+                        fields=('parent',), name='pk_widening_constrained_child_parent_uniq',
+                    ),
+                ],
+            },
+        ),
+        migrations.CreateModel(
             name='SharedChild',
             fields=[
                 ('parent', models.OneToOneField(

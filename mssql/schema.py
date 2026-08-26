@@ -1021,11 +1021,6 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             related_unique_constraint_names = self._db_table_constraint_names(
                 related_table, [related_column], unique_constraint=True
             )
-            if len(related_unique_constraint_names) > 1:
-                raise ValueError(
-                    "Found multiple unique constraints on column %r of table %r; "
-                    "expected at most one." % (related_column, related_table)
-                )
             for pk_name in related_pk_names:
                 self.execute(self._db_table_delete_constraint_sql(
                     self.sql_delete_pk, related_table, pk_name))
