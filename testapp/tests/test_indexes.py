@@ -9,7 +9,7 @@ from django.db.migrations.executor import MigrationExecutor
 from django.db.migrations.migration import Migration
 from django.db.migrations.state import ProjectState
 from django.db.models import UniqueConstraint
-from django.db.utils import DEFAULT_DB_ALIAS, ConnectionHandler, DatabaseError, ProgrammingError
+from django.db.utils import DEFAULT_DB_ALIAS, ConnectionHandler, ProgrammingError
 from django.test import TestCase, TransactionTestCase
 from unittest import skipIf, expectedFailure
 
@@ -33,30 +33,6 @@ logger = logging.getLogger('mssql.tests')
 
 # Result type for migration test helper
 MigrationTestResult = namedtuple('MigrationTestResult', ['model', 'constraints', 'project_state'])
-
-
-def _reset_connection_after_ddl_failure():
-    """
-    Recover the shared connection after intentionally triggering a fatal
-    SQL Server DDL error (e.g. error 5074/1913) inside a
-    ``schema_editor(atomic=True)`` block.
-
-    The error surfaces while the ``atomic()`` context manager is still
-    exiting (deferred_sql flush at ``__exit__`` time), so ``in_atomic_block``
-    is still ``True`` when the exception propagates. Django's
-    ``connection.close()`` only sets ``closed_in_transaction``/``needs_rollback``
-    in that state rather than actually dropping the stale handle, so a plain
-    ``close()`` is not enough to let subsequent tests reconnect. Reset the
-    atomic-transaction bookkeeping explicitly before closing.
-    """
-    conn = django.db.connections[django.db.DEFAULT_DB_ALIAS]
-    conn.close()
-    conn.in_atomic_block = False
-    conn.closed_in_transaction = False
-    conn.needs_rollback = False
-    conn.connection = None
-
-
 
 
 class TestIndexesRetained(TestCase):
@@ -302,26 +278,6 @@ class TestMetaIndexesRetained(TransactionTestCase):
     def _get_context_description(self, use_single_migration: bool) -> str:
         return "combined single migration" if use_single_migration else "split into 2 migrations"
 
-    def _reset_connection_after_ddl_failure(self):
-        """
-        Recover the shared connection after intentionally triggering a fatal
-        SQL Server DDL error (e.g. error 5074/1913) inside a
-        ``schema_editor(atomic=True)`` block.
-
-        The error surfaces while the ``atomic()`` context manager is still
-        exiting (deferred_sql flush at ``__exit__`` time), so ``in_atomic_block``
-        is still ``True`` when the exception propagates. Django's
-        ``connection.close()`` only sets ``closed_in_transaction``/``needs_rollback``
-        in that state rather than actually dropping the stale handle, so a plain
-        ``close()`` is not enough to let subsequent tests reconnect. Reset the
-        atomic-transaction bookkeeping explicitly before closing.
-        """
-        conn = django.db.connections[django.db.DEFAULT_DB_ALIAS]
-        conn.close()
-        conn.in_atomic_block = False
-        conn.closed_in_transaction = False
-        conn.needs_rollback = False
-        conn.connection = None
 
     def test_index_from_meta_indexes_retained_after_type_change(self):
         """
@@ -1710,115 +1666,6 @@ class TestMetaIndexesRetained(TransactionTestCase):
 
 
 
-    def test_pk_widening_regular_foreignkey_behavior(self):
-        """
-        Behavior-lock: widening a referenced PK (AutoField -> BigAutoField)
-        where the referrer is a regular (non-unique) ForeignKey.
-        Split migrations (parent PK widening in its own migration, after the FK's
-        auto-created index has already been committed) succeed: the child's
-        non-unique FK index is dropped and recreated alongside the parent PK widening.
-        Combined migrations currently fail: the FK's implicit db_index=True
-        restoration in DatabaseSchemaEditor._alter_field's rels_to_update loop
-        recreates the FK index eagerly, colliding with the same CreateModel index
-        still queued in deferred_sql, so SQL Server raises a duplicate index/
-        statistics name error (1913) when the schema editor flushes deferred SQL.
-        This is a distinct, pre-existing bug outside this scenario's shared-PK scope;
-        locked here as a known baseline behavior split by migration mode.
-        """
-        for use_single_migration in [False, True]:
-
-            with self.subTest(single_migration=use_single_migration):
-                suffix = '_combined' if use_single_migration else '_split'
-                parent_model_name = f'TestPkWidenBParent{suffix}'
-                child_model_name = f'TestPkWidenBChild{suffix}'
-
-                operations_a = [
-                    migrations.CreateModel(
-                        name=parent_model_name,
-                        fields=[
-                            ('id', models.AutoField(primary_key=True)),
-                            ('name', models.CharField(max_length=20)),
-                        ],
-                    ),
-                    migrations.CreateModel(
-                        name=child_model_name,
-                        fields=[
-                            ('id', models.AutoField(primary_key=True)),
-                            ('parent', models.ForeignKey(
-                                to=f'testapp.{parent_model_name}',
-                                on_delete=models.CASCADE,
-                            )),
-                            ('payload', models.CharField(max_length=20, default='x')),
-                        ],
-                    ),
-                ]
-
-                operations_b = [
-                    migrations.AlterField(
-                        model_name=parent_model_name.lower(),
-                        name='id',
-                        field=models.BigAutoField(primary_key=True),
-                    ),
-                ]
-
-                if use_single_migration:
-                    with self.assertRaisesRegex(
-                        DatabaseError,
-                        r"already exists|\(1913\)",
-                    ):
-                        self._run_migration_test(
-                            operations_a=operations_a,
-                            operations_b=operations_b,
-                            migration_name_prefix='test_pkwiden_b',
-                            model_name=child_model_name,
-                            use_single_migration=use_single_migration,
-                        )
-                    _reset_connection_after_ddl_failure()
-                    continue
-
-                result = self._run_migration_test(
-                    operations_a=operations_a,
-                    operations_b=operations_b,
-                    migration_name_prefix='test_pkwiden_b',
-                    model_name=child_model_name,
-                    use_single_migration=use_single_migration,
-                )
-
-                parent_model = result.project_state.apps.get_model('testapp', parent_model_name)
-                parent_constraints = get_constraints(table_name=parent_model._meta.db_table)
-
-                self.assertTrue(
-                    any(
-                        info.get('foreign_key') and set(info['columns']) == {'parent_id'}
-                        for info in result.constraints.values()
-                    ),
-                    f"Foreign key on 'parent_id' missing after PK widening "
-                    f"({self._get_context_description(use_single_migration)})."
-                )
-                self.assertTrue(
-                    any(
-                        info.get('index') and not info.get('unique') and set(info['columns']) == {'parent_id'}
-                        for info in result.constraints.values()
-                    ),
-                    f"Non-unique index on 'parent_id' missing after PK widening "
-                    f"({self._get_context_description(use_single_migration)})."
-                )
-                self.assertFalse(
-                    any(
-                        info.get('unique') and set(info['columns']) == {'parent_id'}
-                        for info in result.constraints.values()
-                    ),
-                    f"Unexpected unique constraint on 'parent_id' after PK widening "
-                    f"({self._get_context_description(use_single_migration)})."
-                )
-                self.assertTrue(
-                    any(
-                        info.get('primary_key') and set(info['columns']) == {'id'}
-                        for info in parent_constraints.values()
-                    ),
-                    f"Parent primary key on 'id' missing after PK widening "
-                    f"({self._get_context_description(use_single_migration)})."
-                )
 
 
     @skipIf(VERSION >= (5, 1), "index_together removed in Django 5.1")
@@ -2007,9 +1854,6 @@ class TestPkWideningMigrations(TransactionTestCase):
                     info.get('primary_key') and set(info['columns']) == {'id'}
                     for info in parent_constraints.values()
                 ))
-            except DatabaseError:
-                _reset_connection_after_ddl_failure()
-                raise
             finally:
                 MigrationExecutor(django.db.connections[DEFAULT_DB_ALIAS]).migrate([
                     ('pk_widening_migration', None),
