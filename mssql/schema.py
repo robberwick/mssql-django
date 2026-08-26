@@ -1054,27 +1054,30 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             )
             for sql, params in other_actions:
                 self.execute(sql, params)
-            # Recreate the related PRIMARY KEY constraint if we dropped one above and
-            # the relation is still PK-backed on both sides.
-            if related_pk_names and old_rel.field.primary_key and new_rel.field.primary_key:
+            # Restore each dependent constraint identified and dropped above.
+            # Use the already derived list of related pk names, as related field
+            # doesn't change during this operation.
+            for pk_name in related_pk_names:
                 self.execute(
                     self.sql_create_pk % {
                         "table": self.quote_name(new_rel.related_model._meta.db_table),
-                        "name": self.quote_name(
-                            self._create_index_name(
-                                new_rel.related_model._meta.db_table, [new_rel.field.column], suffix="_pk"
-                            )
-                        ),
+                        "name": self.quote_name(pk_name),
                         "columns": self.quote_name(new_rel.field.column),
                     }
                 )
-            # Recreate the related UNIQUE CONSTRAINT if we dropped one above and the
-            # relation is still unique (plain, non-PK OneToOneField case).
-            if related_unique_constraint_names and new_rel.field.unique and not new_rel.field.primary_key:
+            for unique_name in related_unique_constraint_names:
                 if django_version >= (4, 0):
-                    self.execute(self._create_unique_sql(new_rel.related_model, [new_rel.field]))
+                    self.execute(
+                        self._create_unique_sql(
+                            new_rel.related_model, [new_rel.field], name=unique_name
+                        )
+                    )
                 else:
-                    self.execute(self._create_unique_sql(new_rel.related_model, [new_rel.field.column]))
+                    self.execute(
+                        self._create_unique_sql(
+                            new_rel.related_model, [new_rel.field.column], name=unique_name
+                        )
+                    )
             # Restore related_model indexes
             for field in new_rel.related_model._meta.fields:
                 if self._field_should_be_indexed(new_rel.related_model, field):
