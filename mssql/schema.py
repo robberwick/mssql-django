@@ -1018,11 +1018,6 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             related_pk_names = self._db_table_constraint_names(
                 related_table, [related_column], primary_key=True
             )
-            if len(related_pk_names) > 1:
-                raise ValueError(
-                    "Found multiple primary key constraints on column %r of table %r; "
-                    "expected at most one." % (related_column, related_table)
-                )
             related_unique_constraint_names = self._db_table_constraint_names(
                 related_table, [related_column], unique_constraint=True
             )
