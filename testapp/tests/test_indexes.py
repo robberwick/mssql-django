@@ -1838,6 +1838,10 @@ class TestPkWideningMigrations(TransactionTestCase):
                     info.get('unique') and set(info['columns']) == {'parent_id'}
                     for info in plain_child_constraints.values()
                 ))
+                self.assertFalse(any(
+                    info.get('index') and set(info['columns']) == {'parent_id'}
+                    for info in plain_child_constraints.values()
+                ))
                 self.assertTrue(any(
                     info.get('foreign_key') and set(info['columns']) == {'parent_id'}
                     for info in plain_child_constraints.values()
