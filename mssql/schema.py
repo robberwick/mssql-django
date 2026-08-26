@@ -1038,10 +1038,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                 self.execute(self._db_table_delete_constraint_sql(
                     self.sql_delete_unique, related_table, unique_name))
             # Drop related_model indexes, so it can be altered
-            index_names = self._db_table_constraint_names(
-                related_table, index=True,
-                exclude=set(related_pk_names) | set(related_unique_constraint_names),
-            )
+            index_names = self._db_table_constraint_names(related_table, index=True)
             for index_name in index_names:
                 self.execute(self._db_table_delete_constraint_sql(
                     self.sql_delete_index, related_table, index_name))
