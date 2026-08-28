@@ -1027,7 +1027,8 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             related_unique_constraint_names = self._db_table_constraint_names(
                 related_table, [related_column], unique_constraint=True
             )
-            for pk_name in related_pk_names:
+            pk_name = related_pk_names[0] if related_pk_names else None
+            if pk_name:
                 self.execute(self._db_table_delete_constraint_sql(
                     self.sql_delete_pk, related_table, pk_name))
             for unique_name in related_unique_constraint_names:
@@ -1050,7 +1051,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             # Restore each dependent constraint identified and dropped above.
             # Use the already derived list of related pk names, as related field
             # doesn't change during this operation.
-            for pk_name in related_pk_names:
+            if pk_name:
                 self.execute(
                     self.sql_create_pk % {
                         "table": self.quote_name(new_rel.related_model._meta.db_table),
