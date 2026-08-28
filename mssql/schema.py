@@ -1074,7 +1074,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                     )
             # Restore related_model indexes
             for field in new_rel.related_model._meta.fields:
-                if self._field_should_be_indexed(new_rel.related_model, field):
+                if field.db_index:
                     self.execute(
                         self._create_index_sql(new_rel.related_model, [field])
                     )
