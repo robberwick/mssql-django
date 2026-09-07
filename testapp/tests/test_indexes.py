@@ -5,6 +5,7 @@ import django.db
 from django import VERSION
 from django.apps import apps
 from django.db import models, migrations
+from django.db.migrations.executor import MigrationExecutor
 from django.db.migrations.migration import Migration
 from django.db.migrations.state import ProjectState
 from django.db.models import UniqueConstraint
@@ -276,6 +277,7 @@ class TestMetaIndexesRetained(TransactionTestCase):
 
     def _get_context_description(self, use_single_migration: bool) -> str:
         return "combined single migration" if use_single_migration else "split into 2 migrations"
+
 
     def test_index_from_meta_indexes_retained_after_type_change(self):
         """
@@ -1662,6 +1664,10 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     ),
                 )
 
+
+
+
+
     @skipIf(VERSION >= (5, 1), "index_together removed in Django 5.1")
     def test_index_together_retained_after_type_change(self):
         """
@@ -1800,6 +1806,75 @@ class TestMetaIndexesRetained(TransactionTestCase):
                     f"that only executes when the field does NOT have unique=True."
                 )
 
+
+
+
+
+class TestPkWideningMigrations(TransactionTestCase):
+    def test_widening_recreates_onetoone_constraints(self):
+        with self.modify_settings(
+            INSTALLED_APPS={
+                'append': 'testapp.tests.pk_widening_migration_app.apps.PkWideningMigrationAppConfig',
+            }
+        ):
+            connection = django.db.connections[DEFAULT_DB_ALIAS]
+            try:
+                MigrationExecutor(connection).migrate([
+                    ('pk_widening_migration', '0001_initial'),
+                ])
+                executor = MigrationExecutor(connection)
+                final_state = executor.migrate([
+                    ('pk_widening_migration', '0002_widen_parent_pk'),
+                ])
+
+                parent = final_state.apps.get_model('pk_widening_migration', 'Parent')
+                plain_child = final_state.apps.get_model('pk_widening_migration', 'PlainChild')
+                shared_child = final_state.apps.get_model('pk_widening_migration', 'SharedChild')
+                constrained_child = final_state.apps.get_model(
+                    'pk_widening_migration', 'ConstrainedChild'
+                )
+                parent_constraints = get_constraints(table_name=parent._meta.db_table)
+                plain_child_constraints = get_constraints(table_name=plain_child._meta.db_table)
+                shared_child_constraints = get_constraints(table_name=shared_child._meta.db_table)
+                constrained_child_constraints = get_constraints(
+                    table_name=constrained_child._meta.db_table
+                )
+
+                self.assertTrue(any(
+                    info.get('unique') and set(info['columns']) == {'parent_id'}
+                    for info in plain_child_constraints.values()
+                ))
+                self.assertFalse(any(
+                    info.get('index') and set(info['columns']) == {'parent_id'}
+                    for info in plain_child_constraints.values()
+                ))
+                self.assertEqual(
+                    sum(
+                        info.get('unique') and set(info['columns']) == {'parent_id'}
+                        for info in constrained_child_constraints.values()
+                    ),
+                    2,
+                )
+                self.assertTrue(any(
+                    info.get('foreign_key') and set(info['columns']) == {'parent_id'}
+                    for info in plain_child_constraints.values()
+                ))
+                self.assertTrue(any(
+                    info.get('primary_key') and set(info['columns']) == {'parent_id'}
+                    for info in shared_child_constraints.values()
+                ))
+                self.assertTrue(any(
+                    info.get('foreign_key') and set(info['columns']) == {'parent_id'}
+                    for info in shared_child_constraints.values()
+                ))
+                self.assertTrue(any(
+                    info.get('primary_key') and set(info['columns']) == {'id'}
+                    for info in parent_constraints.values()
+                ))
+            finally:
+                MigrationExecutor(django.db.connections[DEFAULT_DB_ALIAS]).migrate([
+                    ('pk_widening_migration', None),
+                ])
 
 
 
