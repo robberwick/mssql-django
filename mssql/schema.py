@@ -430,14 +430,6 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         #      Tests (marked @expectedFailure):
         #        - test_index_from_meta_indexes_retained_after_rename_and_type_change
         #        - test_index_from_meta_indexes_retained_after_rename_and_nullability_change
-        #
-        #   2. unique_together + unique=True: When a field has BOTH unique=True AND
-        #      participates in unique_together, only the single-field unique constraint
-        #      is restored after field alteration. The unique_together constraint is NOT
-        #      restored because the restoration code is in an 'else' block that only
-        #      executes when the field does NOT have unique=True.
-        #      Test (marked @expectedFailure):
-        #        - test_unique_together_retained_when_field_also_has_unique_true
 
         # ============================================================================
         # 1. Constraint and special case handling
@@ -813,29 +805,21 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                     else:
                         self.execute(self._create_unique_sql(model, columns=[old_field.column]))
                 self._delete_deferred_unique_indexes_for_field(old_field)
+            # Restore unique_together constraints as filtered indexes. The filter
+            # ensures ANSI NULL behavior (multiple NULLs allowed).
+            if django_version >= (4, 0):
+                for field_names in model._meta.unique_together:
+                    columns = [model._meta.get_field(field).column for field in field_names]
+                    fields = [model._meta.get_field(field) for field in field_names]
+                    if old_field.column in columns:
+                        condition = ' AND '.join(["[%s] IS NOT NULL" % col for col in columns])
+                        self.execute(self._create_unique_sql(model, fields, condition=condition))
             else:
-                # --------------------------------------------------------------------------------
-                # Restore unique_together constraints
-                # --------------------------------------------------------------------------------
-                # If the field is NOT unique itself but IS part of unique_together,
-                # restore those multi-field unique constraints as filtered indexes.
-                # The filter ensures ANSI NULL behavior (multiple NULLs allowed).
-                # Test: test_unique_together_retained_when_field_also_has_unique_true
-                # https://github.com/microsoft/mssql-django/issues/494
-                # --------------------------------------------------------------------------------
-                if django_version >= (4, 0):
-                    for field_names in model._meta.unique_together:
-                        columns = [model._meta.get_field(field).column for field in field_names]
-                        fields = [model._meta.get_field(field) for field in field_names]
-                        if old_field.column in columns:
-                            condition = ' AND '.join(["[%s] IS NOT NULL" % col for col in columns])
-                            self.execute(self._create_unique_sql(model, fields, condition=condition))
-                else:
-                    for fields in model._meta.unique_together:
-                        columns = [model._meta.get_field(field).column for field in fields]
-                        if old_field.column in columns:
-                            condition = ' AND '.join(["[%s] IS NOT NULL" % col for col in columns])
-                            self.execute(self._create_unique_sql(model, columns, condition=condition))
+                for field_names in model._meta.unique_together:
+                    columns = [model._meta.get_field(field).column for field in field_names]
+                    if old_field.column in columns:
+                        condition = ' AND '.join(["[%s] IS NOT NULL" % col for col in columns])
+                        self.execute(self._create_unique_sql(model, columns, condition=condition))
 
             # --------------------------------------------------------------------------------
             # Primary keys
