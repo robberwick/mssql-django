@@ -30,7 +30,7 @@ if django_version >= (4, 0):
     from django.db.models.sql import Query
     from django.db.backends.ddl_references import Expressions
 # Import CompositePrimaryKey only if Django version is 5.2 or higher
-if django_version >= (5, 2):    
+if django_version >= (5, 2):
     from django.db.models.fields.composite import CompositePrimaryKey
 class Statement(DjStatement):
     def __hash__(self):
@@ -101,12 +101,12 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             WHERE ep.major_id = OBJECT_ID('%(table)s')
             AND ep.name = 'MS_Description'
             AND ep.minor_id = 0)
-                        EXECUTE sp_addextendedproperty 
-                        @name = 'MS_Description', @value = %(comment)s, 
+                        EXECUTE sp_addextendedproperty
+                        @name = 'MS_Description', @value = %(comment)s,
                         @level0type = 'SCHEMA', @level0name = 'dbo',
                         @level1type = 'TABLE', @level1name = %(table)s
             ELSE
-                        EXECUTE sp_updateextendedproperty 
+                        EXECUTE sp_updateextendedproperty
                         @name = 'MS_Description', @value = %(comment)s,
                         @level0type = 'SCHEMA', @level0name = 'dbo',
                         @level1type = 'TABLE', @level1name = %(table)s
@@ -115,16 +115,16 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         IF NOT EXISTS (SELECT NULL FROM sys.extended_properties ep
             WHERE ep.major_id = OBJECT_ID('%(table)s')
             AND ep.name = 'MS_Description'
-            AND ep.minor_id = (SELECT column_id FROM sys.columns 
+            AND ep.minor_id = (SELECT column_id FROM sys.columns
                             WHERE name = '%(column)s'
                             AND object_id = OBJECT_ID('%(table)s')))
-                EXECUTE sp_addextendedproperty 
-                @name = 'MS_Description', @value = %(comment)s, 
+                EXECUTE sp_addextendedproperty
+                @name = 'MS_Description', @value = %(comment)s,
                 @level0type = 'SCHEMA', @level0name = 'dbo',
                 @level1type = 'TABLE', @level1name = %(table)s,
                 @level2type = 'COLUMN', @level2name = %(column)s
             ELSE
-                EXECUTE sp_updateextendedproperty 
+                EXECUTE sp_updateextendedproperty
                 @name = 'MS_Description', @value = %(comment)s,
                 @level0type = 'SCHEMA', @level0name = 'dbo',
                 @level1type = 'TABLE', @level1name = %(table)s,
@@ -173,7 +173,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                 'default': default,
             },
             params,
-        )    
+        )
 
     def _alter_column_database_default_sql(
         self, model, old_field, new_field, drop=False
@@ -459,11 +459,11 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         # Drop any FK constraints, we'll remake them later
         fks_dropped = set()
         if (
-            old_field.remote_field 
-            and old_field.db_constraint 
-            and (django_version < (4,2) 
-                or 
-                (django_version >= (4, 2) 
+            old_field.remote_field
+            and old_field.db_constraint
+            and (django_version < (4,2)
+                or
+                (django_version >= (4, 2)
                 and self._field_should_be_altered(
                     old_field,
                     new_field,
@@ -476,7 +476,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                 not hasattr(new_field, "db_constraint")
                 or not new_field.db_constraint
             ):
-                if(django_version < (4, 2) 
+                if(django_version < (4, 2)
                    or (
                        not isinstance(new_field, ForeignKey)
                        or type(new_field.db_comment) == type(None)
@@ -908,8 +908,10 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             # ------------------------------------------------------------------------------------
             if is_autofield_change:
                 # AutoField changes drop ALL indexes - restore ALL db_index=True fields
+                # that aren't unique (a unique field's index is provided by its unique
+                # constraint instead; see BaseDatabaseSchemaEditor._field_should_be_indexed)
                 for field in model._meta.fields:
-                    if field.db_index:
+                    if self._field_should_be_indexed(model, field):
                         index_columns.append([field])
             elif old_field.db_index and new_field.db_index:
                 index_columns.append([old_field])
@@ -999,6 +1001,8 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         for old_rel, new_rel in rels_to_update:
             rel_db_params = new_rel.field.db_parameters(connection=self.connection)
             rel_type = rel_db_params['type']
+            related_table = old_rel.related_model._meta.db_table
+            related_column = old_rel.field.column
             if django_version >= (4, 2):
                 fragment, other_actions = self._alter_column_type_sql(
                     new_rel.related_model, old_rel.field, new_rel.field, rel_type, old_collation=None, new_collation=None
@@ -1007,11 +1011,35 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                 fragment, other_actions = self._alter_column_type_sql(
                     new_rel.related_model, old_rel.field, new_rel.field, rel_type
                 )
+            # Drop a PRIMARY KEY or UNIQUE CONSTRAINT tied to the related column first
+            # SQL Server refuses to alter a column that such a constraint still
+            # references, and neither constraint kind is picked up by the index=True
+            # lookup below (see mssql/introspection.get_constraints) - both are
+            # CONSTRAINT-backed, not INDEX-backed, so their `index` flag is False.
+            related_pk_constraint_names = self._db_table_constraint_names(
+                related_table, [related_column], primary_key=True
+            )
+            if len(related_pk_constraint_names) > 1:
+                raise ValueError(
+                    "Found multiple primary key constraints on column %r of table %r; "
+                    "expected at most one." % (related_column, related_table)
+                )
+
+            related_unique_constraint_names = self._db_table_constraint_names(
+                related_table, [related_column], unique_constraint=True
+            )
+            related_pk_constraint_name = related_pk_constraint_names[0] if related_pk_constraint_names else None
+            if related_pk_constraint_name:
+                self.execute(self._db_table_delete_constraint_sql(
+                    self.sql_delete_pk, related_table, related_pk_constraint_name))
+            for unique_name in related_unique_constraint_names:
+                self.execute(self._db_table_delete_constraint_sql(
+                    self.sql_delete_unique, related_table, unique_name))
             # Drop related_model indexes, so it can be altered
-            index_names = self._db_table_constraint_names(old_rel.related_model._meta.db_table, index=True)
+            index_names = self._db_table_constraint_names(related_table, index=True)
             for index_name in index_names:
                 self.execute(self._db_table_delete_constraint_sql(
-                    self.sql_delete_index, old_rel.related_model._meta.db_table, index_name))
+                    self.sql_delete_index, related_table, index_name))
             self.execute(
                 self.sql_alter_column % {
                     "table": self.quote_name(new_rel.related_model._meta.db_table),
@@ -1021,9 +1049,34 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             )
             for sql, params in other_actions:
                 self.execute(sql, params)
-            # Restore related_model indexes
+            # Restore each dependent constraint identified and dropped above.
+            # Recreate with the same constraint names that we dropped; the related field
+            # doesn't change during this operation.
+            if related_pk_constraint_name:
+                self.execute(
+                    self.sql_create_pk % {
+                        "table": self.quote_name(new_rel.related_model._meta.db_table),
+                        "name": self.quote_name(related_pk_constraint_name),
+                        "columns": self.quote_name(new_rel.field.column),
+                    }
+                )
+            for unique_name in related_unique_constraint_names:
+                if django_version >= (4, 0):
+                    self.execute(
+                        self._create_unique_sql(
+                            new_rel.related_model, [new_rel.field], name=unique_name
+                        )
+                    )
+                else:
+                    self.execute(
+                        self._create_unique_sql(
+                            new_rel.related_model, [new_rel.field.column], name=unique_name
+                        )
+                    )
+            # Restore related_model indexes (skip unique fields - their index is
+            # provided by the unique constraint restored above instead)
             for field in new_rel.related_model._meta.fields:
-                if field.db_index:
+                if self._field_should_be_indexed(new_rel.related_model, field):
                     self.execute(
                         self._create_index_sql(new_rel.related_model, [field])
                     )
@@ -1096,9 +1149,9 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             index_columns.append([old_field.column])
         elif old_field.null != new_field.null:
             index_columns.append([old_field.column])
-        # Handle index_together for only django version < 5.1    
-        if django_version < (5, 1):  
-           # Iterate over each set of field names defined in index_together  
+        # Handle index_together for only django version < 5.1
+        if django_version < (5, 1):
+           # Iterate over each set of field names defined in index_together
            for fields in model._meta.index_together:
               # Get the actual column names for each field in the set
               columns = [model._meta.get_field(field).column for field in fields]
@@ -1464,7 +1517,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                 autoinc_sql = self.connection.ops.autoinc_sql(model._meta.db_table, field.column)
                 if autoinc_sql:
                     self.deferred_sql.extend(autoinc_sql)
-                   
+
         # Initialize composite_pk_sql to None; will be set if composite primary key is detected
         composite_pk_sql = None
          # Check if Django version is >= 5.2 and the model has composite primary key fields
