@@ -4283,6 +4283,117 @@ class TestPkWideningMigrations(TransactionTestCase):
             if info['index'] and not info['unique'] and info['columns'] == [column]
         )
 
+    def _assert_widening_preserves_downstream_foreign_keys(self, shared_pk):
+        suffix = 'SharedPk' if shared_pk else 'ToFieldUnique'
+        parent_name = 'Cascade%sParent' % suffix
+        child_name = 'Cascade%sChild' % suffix
+        grandchild_name = 'Cascade%sGrandchild' % suffix
+        child_fields = [] if shared_pk else [('id', models.AutoField(primary_key=True))]
+        child_fields.append(('parent', models.OneToOneField(
+            to='testapp.%s' % parent_name.lower(),
+            on_delete=models.CASCADE,
+            primary_key=shared_pk,
+        )))
+        initial_migration = Migration('downstream_%s_initial' % suffix.lower(), 'testapp')
+        initial_migration.operations = [
+            migrations.CreateModel(
+                name=parent_name,
+                fields=[('id', models.AutoField(primary_key=True))],
+            ),
+            migrations.CreateModel(name=child_name, fields=child_fields),
+            migrations.CreateModel(
+                name=grandchild_name,
+                fields=[
+                    ('id', models.AutoField(primary_key=True)),
+                    ('child', models.ForeignKey(
+                        to='testapp.%s' % child_name.lower(),
+                        on_delete=models.CASCADE,
+                        **({} if shared_pk else {'to_field': 'parent'}),
+                    )),
+                ],
+            ),
+        ]
+        widen_migration = Migration('downstream_%s_widen' % suffix.lower(), 'testapp')
+        widen_migration.operations = [migrations.AlterField(
+            model_name=parent_name.lower(),
+            name='id',
+            field=models.BigAutoField(primary_key=True),
+        )]
+        conn = django.db.connections[DEFAULT_DB_ALIAS]
+        with conn.schema_editor(atomic=True) as editor:
+            project_state = initial_migration.apply(ProjectState(), editor)
+
+        parent = project_state.apps.get_model('testapp', parent_name)
+        child = project_state.apps.get_model('testapp', child_name)
+        grandchild = project_state.apps.get_model('testapp', grandchild_name)
+        key_kind = 'primary_key' if shared_pk else 'unique_constraint'
+        child_constraints = get_constraints(child._meta.db_table)
+        key_names = [
+            name for name, info in child_constraints.items()
+            if info[key_kind] and info['columns'] == ['parent_id']
+        ]
+        self.assertEqual(len(key_names), 1)
+        key_name = key_names[0]
+        for model, column, target in (
+            (child, 'parent_id', (parent._meta.db_table, 'id')),
+            (grandchild, 'child_id', (child._meta.db_table, 'parent_id')),
+        ):
+            self.assertEqual([
+                (info['columns'], info['foreign_key'])
+                for info in get_constraints(model._meta.db_table).values()
+                if info['foreign_key']
+            ], [([column], target)])
+        p1_id = parent.objects.create().pk
+        first_child = child.objects.create(parent_id=p1_id)
+        grandchild.objects.create(child=first_child)
+
+        with conn.schema_editor(atomic=True) as editor:
+            final_state = widen_migration.apply(project_state, editor)
+
+        parent = final_state.apps.get_model('testapp', parent_name)
+        child = final_state.apps.get_model('testapp', child_name)
+        grandchild = final_state.apps.get_model('testapp', grandchild_name)
+        self.assertEqual(list(child.objects.values_list('parent_id', flat=True)), [p1_id])
+        self.assertEqual(list(grandchild.objects.values_list('child_id', flat=True)), [p1_id])
+        p2_id = parent.objects.create().pk
+        second_child = child.objects.create(parent_id=p2_id)
+        grandchild.objects.create(child=second_child)
+        self.assertEqual(
+            list(grandchild.objects.order_by('child_id').values_list('child_id', flat=True)),
+            [p1_id, p2_id],
+        )
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            grandchild.objects.create(child_id=p2_id + 1)
+
+        child_constraints = get_constraints(child._meta.db_table)
+        self.assertIn(key_name, child_constraints)
+        self.assertTrue(child_constraints[key_name][key_kind])
+        self.assertEqual(child_constraints[key_name]['columns'], ['parent_id'])
+        for model, column, target in (
+            (child, 'parent_id', (parent._meta.db_table, 'id')),
+            (grandchild, 'child_id', (child._meta.db_table, 'parent_id')),
+        ):
+            self.assertEqual([
+                (info['columns'], info['foreign_key'])
+                for info in get_constraints(model._meta.db_table).values()
+                if info['foreign_key']
+            ], [([column], target)])
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    'SELECT TYPE_NAME(system_type_id) FROM sys.columns '
+                    'WHERE object_id = OBJECT_ID(%s) AND name = %s',
+                    [model._meta.db_table, column],
+                )
+                self.assertEqual(cursor.fetchone(), ('bigint',))
+
+    def test_widening_preserves_downstream_foreign_key_through_shared_primary_key(self):
+        """Widening a parent PK retains the FK to a child's shared primary key."""
+        self._assert_widening_preserves_downstream_foreign_keys(shared_pk=True)
+
+    def test_widening_preserves_downstream_foreign_key_through_unique_to_field(self):
+        """Widening a parent PK retains the FK targeting a child's unique parent field."""
+        self._assert_widening_preserves_downstream_foreign_keys(shared_pk=False)
+
     def test_widening_preserves_composite_unique_constraint_on_related_model(self):
         """Widening a parent PK preserves a related composite UNIQUE and its data."""
         initial_migration = Migration('composite_unique_cascade_initial', 'testapp')
