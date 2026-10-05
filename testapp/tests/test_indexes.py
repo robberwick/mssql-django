@@ -4394,6 +4394,135 @@ class TestPkWideningMigrations(TransactionTestCase):
         """Widening a parent PK retains the FK targeting a child's unique parent field."""
         self._assert_widening_preserves_downstream_foreign_keys(shared_pk=False)
 
+    def _assert_combined_widening_preserves_foreign_keys(self, shared_pk, existing_child=False):
+        suffix = ('SharedPk' if shared_pk else 'ToFieldUnique') + ('Mixed' if existing_child else '')
+        parent_name = 'DeferredCascade%sParent' % suffix
+        child_name = 'DeferredCascade%sChild' % suffix
+        grandchild_name = 'DeferredCascade%sGrandchild' % suffix
+        child_fields = [] if shared_pk else [('id', models.AutoField(primary_key=True))]
+        child_fields.append(('parent', models.OneToOneField(
+            to='testapp.%s' % parent_name.lower(),
+            on_delete=models.CASCADE,
+            primary_key=shared_pk,
+        )))
+        operations = [
+            migrations.CreateModel(
+                name=parent_name,
+                fields=[('id', models.AutoField(primary_key=True))],
+            ),
+            migrations.CreateModel(name=child_name, fields=child_fields),
+        ]
+        conn = django.db.connections[DEFAULT_DB_ALIAS]
+        project_state = ProjectState()
+        original_child_fk_names = None
+        if existing_child:
+            initial_migration = Migration('deferred_cascade_%s_initial' % suffix.lower(), 'testapp')
+            initial_migration.operations = operations
+            with conn.schema_editor(atomic=True) as editor:
+                project_state = initial_migration.apply(project_state, editor)
+            child = project_state.apps.get_model('testapp', child_name)
+            original_child_fk_names = [
+                name for name, info in get_constraints(child._meta.db_table).items()
+                if info['foreign_key']
+            ]
+            self.assertEqual(len(original_child_fk_names), 1)
+            operations = []
+        operations.extend([
+            migrations.CreateModel(
+                name=grandchild_name,
+                fields=[
+                    ('id', models.AutoField(primary_key=True)),
+                    ('child', models.ForeignKey(
+                        to='testapp.%s' % child_name.lower(),
+                        on_delete=models.CASCADE,
+                        # Isolate deferred FK restoration from the separate
+                        # plain-index deferral path.
+                        db_index=False,
+                        **({} if shared_pk else {'to_field': 'parent'}),
+                    )),
+                ],
+            ),
+            migrations.AlterField(
+                model_name=parent_name.lower(),
+                name='id',
+                field=models.BigAutoField(primary_key=True),
+            ),
+        ])
+        combined_migration = Migration('deferred_cascade_%s_combined' % suffix.lower(), 'testapp')
+        combined_migration.operations = operations
+        with conn.schema_editor(atomic=True) as editor:
+            final_state = combined_migration.apply(project_state, editor)
+
+        parent = final_state.apps.get_model('testapp', parent_name)
+        child = final_state.apps.get_model('testapp', child_name)
+        grandchild = final_state.apps.get_model('testapp', grandchild_name)
+        p1_id = parent.objects.create().pk
+        first_child = child.objects.create(parent_id=p1_id)
+        grandchild.objects.create(child=first_child)
+        for expected_type in ('bigint', 'int'):
+            if expected_type == 'int':
+                narrow_migration = Migration('deferred_cascade_%s_narrow' % suffix.lower(), 'testapp')
+                narrow_migration.operations = [migrations.AlterField(
+                    model_name=parent_name.lower(),
+                    name='id',
+                    field=models.AutoField(primary_key=True),
+                )]
+                with conn.schema_editor(atomic=True) as editor:
+                    final_state = narrow_migration.apply(final_state, editor)
+                parent = final_state.apps.get_model('testapp', parent_name)
+                child = final_state.apps.get_model('testapp', child_name)
+                grandchild = final_state.apps.get_model('testapp', grandchild_name)
+            self.assertEqual(list(child.objects.values_list('parent_id', flat=True)), [p1_id])
+            self.assertEqual(list(grandchild.objects.values_list('child_id', flat=True)), [p1_id])
+            for model, column, target in (
+                (child, 'parent_id', (parent._meta.db_table, 'id')),
+                (grandchild, 'child_id', (child._meta.db_table, 'parent_id')),
+            ):
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        'SELECT COUNT(*) FROM sys.foreign_keys '
+                        'WHERE parent_object_id = OBJECT_ID(%s)',
+                        [model._meta.db_table],
+                    )
+                    self.assertEqual(cursor.fetchone(), (1,))
+                    cursor.execute(
+                        'SELECT TYPE_NAME(system_type_id) FROM sys.columns '
+                        'WHERE object_id = OBJECT_ID(%s) AND name = %s',
+                        [model._meta.db_table, column],
+                    )
+                    self.assertEqual(cursor.fetchone(), (expected_type,))
+                self.assertEqual([
+                    (info['columns'], info['foreign_key'])
+                    for info in get_constraints(model._meta.db_table).values()
+                    if info['foreign_key']
+                ], [([column], target)])
+            if original_child_fk_names is not None:
+                self.assertEqual([
+                    name for name, info in get_constraints(child._meta.db_table).items()
+                    if info['foreign_key']
+                ], original_child_fk_names)
+            with self.assertRaises(IntegrityError), transaction.atomic():
+                grandchild.objects.create(child_id=p1_id + 1000)
+        p2_id = parent.objects.create().pk
+        second_child = child.objects.create(parent_id=p2_id)
+        grandchild.objects.create(child=second_child)
+        self.assertEqual(
+            list(grandchild.objects.order_by('child_id').values_list('child_id', flat=True)),
+            [p1_id, p2_id],
+        )
+
+    def test_combined_widening_preserves_one_foreign_key_through_shared_primary_key(self):
+        """Combined creation and widening retain one FK per shared-PK relationship."""
+        self._assert_combined_widening_preserves_foreign_keys(shared_pk=True)
+
+    def test_combined_widening_preserves_one_foreign_key_through_unique_to_field(self):
+        """Combined creation and widening retain one FK per unique to_field relationship."""
+        self._assert_combined_widening_preserves_foreign_keys(shared_pk=False)
+
+    def test_widening_preserves_existing_foreign_key_with_deferred_downstream_foreign_key(self):
+        """Widening restores an existing FK without duplicating a deferred downstream FK."""
+        self._assert_combined_widening_preserves_foreign_keys(shared_pk=True, existing_child=True)
+
     def test_widening_preserves_composite_unique_constraint_on_related_model(self):
         """Widening a parent PK preserves a related composite UNIQUE and its data."""
         initial_migration = Migration('composite_unique_cascade_initial', 'testapp')
@@ -4985,16 +5114,9 @@ class TestPkWideningMigrations(TransactionTestCase):
         self.assertEqual(self._unique_null_indexes(child_constraints, 'parent_id'), 1)
         self.assertEqual(self._unique_null_indexes(child_constraints, 'alias'), 1)
         self.assertEqual(self._plain_indexes(child_constraints, 'parent_id'), 0)
-        # set(), not list equality: a pre-existing, unrelated gap in the
-        # drop/rebuild-FK logic creates a second (redundant) FK constraint on
-        # this column when CreateModel and the widening AlterField share a
-        # migration, which duplicates 'parent_id' within a single constraint's
-        # column list via the introspection join. Harmless here: we only
-        # assert a FK exists on this column, not that there is exactly one.
-        self.assertTrue(any(
-            info['foreign_key'] and set(info['columns']) == {'parent_id'}
-            for info in child_constraints.values()
-        ))
+        self.assertEqual([
+            info['columns'] for info in child_constraints.values() if info['foreign_key']
+        ], [['parent_id']])
 
         parent = final_state.apps.get_model('testapp', 'ParentCombined')
         p = parent.objects.create(name='p1')
