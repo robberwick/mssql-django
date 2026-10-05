@@ -717,7 +717,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
 
     def _field_needs_unique_null_index(self, field):
         """A nullable unique field is enforced by a filtered unique INDEX
-        (sql_create_unique_null), not a UNIQUE CONSTRAINT and not a db_index."""
+        (sql_create_unique_null), not a UNIQUE CONSTRAINT."""
         return (
             self.connection.features.supports_nullable_unique_constraints and
             not field.many_to_many and field.null and field.unique
