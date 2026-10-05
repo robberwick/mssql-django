@@ -855,6 +855,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                 (old_field.unique and new_field.unique)
             ) and old_type != new_type
         )
+        related_fk_statements = []
         if drop_foreign_keys:
             # '_meta.related_field' also contains M2M reverse fields, these
             # will be filtered out
@@ -863,6 +864,10 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                     new_rel.related_model, [new_rel.field.column], foreign_key=True
                 )
                 for fk_name in rel_fk_names:
+                    if new_rel.field.db_constraint:
+                        statement = self._create_fk_sql(new_rel.related_model, new_rel.field, "_fk")
+                        statement.parts['name'] = self.quote_name(fk_name)
+                        related_fk_statements.append(statement)
                     self.execute(self._delete_constraint_sql(self.sql_delete_fk, new_rel.related_model, fk_name))
 
         # If working with an AutoField or BigAutoField drop all indexes on the related table
@@ -1607,12 +1612,10 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                 (fks_dropped or not old_field.remote_field or not old_field.db_constraint) and
                 new_field.db_constraint):
             self.execute(self._create_fk_sql(model, new_field, "_fk_%(to_table)s_%(to_column)s"))
-        # Restore the same recursive relations used by the FK-drop pass, after
-        # all dependent columns and their PK/UNIQUE constraints are restored.
-        if drop_foreign_keys:
-            for _old_rel, rel in _related_non_m2m_objects(old_field, new_field):
-                if rel.field.db_constraint:
-                    self.execute(self._create_fk_sql(rel.related_model, rel.field, "_fk"))
+        # Restore only catalog-found FKs dropped above, retaining their names.
+        # Not-yet-created FKs remain in deferred_sql until the editor exits.
+        for statement in related_fk_statements:
+            self.execute(statement)
         # Does it have check constraints we need to add?
         if (old_db_params['check'] != new_db_params['check'] and new_db_params['check']) or (
             # SQL Server requires explicit creation after altering column type with the same constraint
