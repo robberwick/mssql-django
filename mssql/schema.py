@@ -10,7 +10,6 @@ from collections import defaultdict
 
 from django.db.backends.base.schema import (
     BaseDatabaseSchemaEditor,
-    _is_relevant_relation,
     _related_non_m2m_objects,
     logger,
 )
@@ -1608,10 +1607,11 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                 (fks_dropped or not old_field.remote_field or not old_field.db_constraint) and
                 new_field.db_constraint):
             self.execute(self._create_fk_sql(model, new_field, "_fk_%(to_table)s_%(to_column)s"))
-        # Rebuild FKs that pointed to us if we previously had to drop them
+        # Restore the same recursive relations used by the FK-drop pass, after
+        # all dependent columns and their PK/UNIQUE constraints are restored.
         if drop_foreign_keys:
-            for rel in new_field.model._meta.related_objects:
-                if _is_relevant_relation(rel, new_field) and rel.field.db_constraint:
+            for _old_rel, rel in _related_non_m2m_objects(old_field, new_field):
+                if rel.field.db_constraint:
                     self.execute(self._create_fk_sql(rel.related_model, rel.field, "_fk"))
         # Does it have check constraints we need to add?
         if (old_db_params['check'] != new_db_params['check'] and new_db_params['check']) or (
