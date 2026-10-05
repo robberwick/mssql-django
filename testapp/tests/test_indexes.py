@@ -4283,6 +4283,163 @@ class TestPkWideningMigrations(TransactionTestCase):
             if info['index'] and not info['unique'] and info['columns'] == [column]
         )
 
+    def test_widening_preserves_composite_unique_constraint_on_related_model(self):
+        """Widening a parent PK preserves a related composite UNIQUE and its data."""
+        initial_migration = Migration('composite_unique_cascade_initial', 'testapp')
+        initial_migration.operations = [
+            migrations.CreateModel(
+                name='CascadeCompositeUniqueParent',
+                fields=[('id', models.AutoField(primary_key=True))],
+            ),
+            migrations.CreateModel(
+                name='CascadeCompositeUniqueChild',
+                fields=[
+                    ('id', models.AutoField(primary_key=True)),
+                    ('parent', models.ForeignKey(
+                        to='testapp.cascadecompositeuniqueparent',
+                        on_delete=models.CASCADE,
+                        db_column='parent_key',
+                    )),
+                    ('tenant', models.IntegerField(db_column='tenant_key')),
+                ],
+                options={
+                    'constraints': [
+                        models.UniqueConstraint(
+                            fields=('tenant', 'parent'),
+                            name='cascade_composite_tenant_parent_uniq',
+                        ),
+                    ],
+                },
+            ),
+        ]
+        widen_migration = Migration('composite_unique_cascade_widen', 'testapp')
+        widen_migration.operations = [
+            migrations.AlterField(
+                model_name='cascadecompositeuniqueparent',
+                name='id',
+                field=models.BigAutoField(primary_key=True),
+            ),
+        ]
+        conn = django.db.connections[DEFAULT_DB_ALIAS]
+        with conn.schema_editor(atomic=True) as editor:
+            project_state = initial_migration.apply(ProjectState(), editor)
+
+        parent = project_state.apps.get_model('testapp', 'CascadeCompositeUniqueParent')
+        child = project_state.apps.get_model('testapp', 'CascadeCompositeUniqueChild')
+        constraints = get_constraints(child._meta.db_table)
+        constraint_name = 'cascade_composite_tenant_parent_uniq'
+        self.assertEqual(constraints[constraint_name]['columns'], ['tenant_key', 'parent_key'])
+        self.assertTrue(constraints[constraint_name]['unique_constraint'])
+        self.assertFalse(constraints[constraint_name]['index'])
+        p1_id = parent.objects.create().pk
+        p2_id = parent.objects.create().pk
+        child.objects.create(parent_id=p1_id, tenant=1)
+
+        with conn.schema_editor(atomic=True) as editor:
+            final_state = widen_migration.apply(project_state, editor)
+
+        child = final_state.apps.get_model('testapp', 'CascadeCompositeUniqueChild')
+        constraints = get_constraints(child._meta.db_table)
+        self.assertIn(constraint_name, constraints)
+        self.assertEqual(constraints[constraint_name]['columns'], ['tenant_key', 'parent_key'])
+        self.assertTrue(constraints[constraint_name]['unique_constraint'])
+        self.assertFalse(constraints[constraint_name]['index'])
+        self.assertEqual(sum(
+            info['unique_constraint'] and info['columns'] == ['tenant_key', 'parent_key']
+            for info in constraints.values()
+        ), 1)
+        self.assertTrue(any(
+            info['foreign_key'] and info['columns'] == ['parent_key']
+            for info in constraints.values()
+        ))
+        self.assertEqual(list(child.objects.values_list('parent_id', 'tenant')), [(p1_id, 1)])
+        child.objects.create(parent_id=p1_id, tenant=2)
+        child.objects.create(parent_id=p2_id, tenant=1)
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            child.objects.create(parent_id=p1_id, tenant=1)
+        with conn.cursor() as cursor:
+            cursor.execute(
+                'SELECT TYPE_NAME(system_type_id) FROM sys.columns '
+                'WHERE object_id = OBJECT_ID(%s) AND name = %s',
+                [child._meta.db_table, 'parent_key'],
+            )
+            self.assertEqual(cursor.fetchone(), ('bigint',))
+
+    def test_widening_preserves_composite_primary_key_on_related_model(self):
+        """Widening a parent PK preserves a related composite primary key and its data."""
+        initial_migration = Migration('composite_pk_cascade_initial', 'testapp')
+        initial_migration.operations = [
+            migrations.CreateModel(
+                name='CascadeCompositePkParent',
+                fields=[('id', models.AutoField(primary_key=True))],
+            ),
+            migrations.CreateModel(
+                name='CascadeCompositePkChild',
+                fields=[
+                    ('pk', models.CompositePrimaryKey('tenant', 'parent')),
+                    ('parent', models.ForeignKey(
+                        to='testapp.cascadecompositepkparent',
+                        on_delete=models.CASCADE,
+                        db_column='parent_key',
+                    )),
+                    ('tenant', models.IntegerField(db_column='tenant_key')),
+                ],
+            ),
+        ]
+        widen_migration = Migration('composite_pk_cascade_widen', 'testapp')
+        widen_migration.operations = [
+            migrations.AlterField(
+                model_name='cascadecompositepkparent',
+                name='id',
+                field=models.BigAutoField(primary_key=True),
+            ),
+        ]
+        conn = django.db.connections[DEFAULT_DB_ALIAS]
+        with conn.schema_editor(atomic=True) as editor:
+            project_state = initial_migration.apply(ProjectState(), editor)
+
+        parent = project_state.apps.get_model('testapp', 'CascadeCompositePkParent')
+        child = project_state.apps.get_model('testapp', 'CascadeCompositePkChild')
+        constraints = get_constraints(child._meta.db_table)
+        pk_names = [name for name, info in constraints.items() if info['primary_key']]
+        self.assertEqual(len(pk_names), 1)
+        constraint_name = pk_names[0]
+        self.assertEqual(constraints[constraint_name]['columns'], ['tenant_key', 'parent_key'])
+        self.assertTrue(constraints[constraint_name]['primary_key'])
+        p1_id = parent.objects.create().pk
+        p2_id = parent.objects.create().pk
+        child.objects.create(parent_id=p1_id, tenant=1)
+
+        with conn.schema_editor(atomic=True) as editor:
+            final_state = widen_migration.apply(project_state, editor)
+
+        child = final_state.apps.get_model('testapp', 'CascadeCompositePkChild')
+        constraints = get_constraints(child._meta.db_table)
+        self.assertIn(constraint_name, constraints)
+        self.assertEqual(constraints[constraint_name]['columns'], ['tenant_key', 'parent_key'])
+        self.assertTrue(constraints[constraint_name]['primary_key'])
+        self.assertEqual(sum(
+            info['primary_key'] and info['columns'] == ['tenant_key', 'parent_key']
+            for info in constraints.values()
+        ), 1)
+        self.assertTrue(any(
+            info['foreign_key'] and info['columns'] == ['parent_key']
+            for info in constraints.values()
+        ))
+        self.assertEqual(list(child.objects.values_list('parent_id', 'tenant')), [(p1_id, 1)])
+        child.objects.create(parent_id=p1_id, tenant=2)
+        child.objects.create(parent_id=p2_id, tenant=1)
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            child.objects.create(parent_id=p1_id, tenant=1)
+        with conn.cursor() as cursor:
+            cursor.execute(
+                'SELECT TYPE_NAME(system_type_id) FROM sys.columns '
+                'WHERE object_id = OBJECT_ID(%s) AND name = %s',
+                [child._meta.db_table, 'parent_key'],
+            )
+            self.assertEqual(cursor.fetchone(), ('bigint',))
+
+
     def test_widening_recreates_onetoone_constraints(self):
         """
         Regression test for widening a primary key (e.g. AutoField -> BigAutoField)
