@@ -1199,8 +1199,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             self._delete_primary_key(model, strict)
         # Added a unique?
         if self._unique_should_be_added(old_field, new_field):
-            if (self.connection.features.supports_nullable_unique_constraints and
-                    not new_field.many_to_many and new_field.null):
+            if self._field_needs_unique_null_index(new_field):
 
                 self.execute(
                     self._create_index_sql(
@@ -2053,8 +2052,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         if 'DEFAULT' in definition and field.null:
             definition = definition.replace('NULL', 'WITH VALUES')
 
-        if (self.connection.features.supports_nullable_unique_constraints and
-                not field.many_to_many and field.null and field.unique):
+        if self._field_needs_unique_null_index(field):
 
             definition = definition.replace(' UNIQUE', '')
             statement = self._create_index_sql(
@@ -2316,8 +2314,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             if (django_version >= (5,0) and field.generated):
                 definition = definition[definition.find('AS'):]
 
-            if (self.connection.features.supports_nullable_unique_constraints and
-                    not field.many_to_many and field.null and field.unique):
+            if self._field_needs_unique_null_index(field):
 
                 definition = definition.replace(' UNIQUE', '')
                 statement = self._create_index_sql(
