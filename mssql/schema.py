@@ -1496,25 +1496,63 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             # references, and neither constraint kind is picked up by the index=True
             # lookup below (see mssql/introspection.get_constraints) - both are
             # CONSTRAINT-backed, not INDEX-backed, so their `index` flag is False.
-            related_pk_constraint_names = self._db_table_constraint_names(
-                related_table, [related_column], primary_key=True
+            with self.connection.cursor() as cursor:
+                related_constraints = self.connection.introspection.get_constraints(
+                    cursor, related_table
+                )
+            related_column_identifier = self.connection.introspection.identifier_converter(
+                related_column
             )
-            if len(related_pk_constraint_names) > 1:
+            # The catalog FK join can repeat key columns; deduplicate without
+            # losing the ordinal order of a composite key.
+            related_pk_constraints = {
+                name: list(dict.fromkeys(info['columns']))
+                for name, info in related_constraints.items()
+                if info['primary_key'] and related_column_identifier in info['columns']
+            }
+            related_unique_constraints = {
+                name: list(dict.fromkeys(info['columns']))
+                for name, info in related_constraints.items()
+                if info['unique_constraint'] and related_column_identifier in info['columns']
+            }
+            if len(related_pk_constraints) > 1:
                 raise ValueError(
                     "Found multiple primary key constraints on column %r of table %r; "
                     "expected at most one." % (related_column, related_table)
                 )
 
-            related_unique_constraint_names = self._db_table_constraint_names(
-                related_table, [related_column], unique_constraint=True
-            )
-            related_pk_constraint_name = related_pk_constraint_names[0] if related_pk_constraint_names else None
-            if related_pk_constraint_name:
+            # Resolve every restoration statement before dropping constraints.
+            related_pk_statements = [
+                self.sql_create_pk % {
+                    "table": self.quote_name(related_table),
+                    "name": self.quote_name(name),
+                    "columns": ', '.join(self.quote_name(column) for column in columns),
+                }
+                for name, columns in related_pk_constraints.items()
+            ]
+            related_unique_statements = []
+            related_fields_by_column = {
+                field.column: field for field in new_rel.related_model._meta.fields
+            }
+            for name, columns in related_unique_constraints.items():
+                fields = []
+                for column in columns:
+                    try:
+                        fields.append(related_fields_by_column[column])
+                    except KeyError as exc:
+                        raise FieldDoesNotExist(
+                            "Related unique constraint '%s' references unresolved column '%s'."
+                            % (name, column)
+                        ) from exc
+                related_unique_statements.append(
+                    self._create_unique_sql(new_rel.related_model, fields, name=name)
+                )
+            for name in related_pk_constraints:
                 self.execute(self._db_table_delete_constraint_sql(
-                    self.sql_delete_pk, related_table, related_pk_constraint_name))
-            for unique_name in related_unique_constraint_names:
+                    self.sql_delete_pk, related_table, name))
+            for name in related_unique_constraints:
                 self.execute(self._db_table_delete_constraint_sql(
-                    self.sql_delete_unique, related_table, unique_name))
+                    self.sql_delete_unique, related_table, name))
             # Drop related_model indexes, so it can be altered
             index_names = self._db_table_constraint_names(related_table, index=True)
             for index_name in index_names:
@@ -1529,30 +1567,11 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             )
             for sql, params in other_actions:
                 self.execute(sql, params)
-            # Restore each dependent constraint identified and dropped above.
-            # Recreate with the same constraint names that we dropped; the related field
-            # doesn't change during this operation.
-            if related_pk_constraint_name:
-                self.execute(
-                    self.sql_create_pk % {
-                        "table": self.quote_name(new_rel.related_model._meta.db_table),
-                        "name": self.quote_name(related_pk_constraint_name),
-                        "columns": self.quote_name(new_rel.field.column),
-                    }
-                )
-            for unique_name in related_unique_constraint_names:
-                if django_version >= (4, 0):
-                    self.execute(
-                        self._create_unique_sql(
-                            new_rel.related_model, [new_rel.field], name=unique_name
-                        )
-                    )
-                else:
-                    self.execute(
-                        self._create_unique_sql(
-                            new_rel.related_model, [new_rel.field.column], name=unique_name
-                        )
-                    )
+            # Restore original names and complete ordered keys before field indexes.
+            for statement in related_pk_statements:
+                self.execute(statement)
+            for statement in related_unique_statements:
+                self.execute(statement)
             # Restore related_model indexes: NOT NULL unique fields via the PK/UNIQUE
             # constraint blocks above; nullable-unique fields via a filtered index below.
             for field in new_rel.related_model._meta.fields:

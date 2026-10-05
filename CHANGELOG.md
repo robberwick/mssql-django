@@ -16,6 +16,10 @@ All notable user-facing changes to mssql-django are documented in this file.
   indexes, when cascading an `AutoField`-to-`BigAutoField` primary key
   widening onto a `OneToOneField`/unique foreign key column, fixing a SQL
   Server error 5074 that aborted the migration ([#581]).
+- Preserved dependent composite `PRIMARY KEY` and `UNIQUE` constraints'
+  original names, ordered columns, and enforcement when widening a referenced
+  primary key, fixing SQL Server error 5074 on the related foreign key column
+  ([#627]).
 
 ## [2.0.0] - 2026-09-18
 
@@ -175,3 +179,4 @@ All notable user-facing changes to mssql-django are documented in this file.
 [#605]: https://github.com/microsoft/mssql-django/pull/605
 [#609]: https://github.com/microsoft/mssql-django/pull/609
 [#613]: https://github.com/microsoft/mssql-django/pull/613
+[#627]: https://github.com/microsoft/mssql-django/pull/627
