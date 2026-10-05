@@ -4431,19 +4431,19 @@ class TestPkWideningMigrations(TransactionTestCase):
         """
         operations_a = [
             migrations.CreateModel(
-                name='NullPkParent',
+                name='OneToOneParent',
                 fields=[
                     ('id', models.AutoField(primary_key=True)),
                     ('name', models.CharField(max_length=20, default='x')),
                 ],
             ),
             migrations.CreateModel(
-                name='NullPkChild',
+                name='ChildWithNullableOneToOne',
                 fields=[
                     ('id', models.AutoField(primary_key=True)),
                     ('parent', models.OneToOneField(
                         on_delete=models.CASCADE,
-                        to='testapp.nullpkparent',
+                        to='testapp.onetooneparent',
                         null=True,
                     )),
                     ('alias', models.CharField(max_length=20, unique=True, null=True)),
@@ -4452,16 +4452,16 @@ class TestPkWideningMigrations(TransactionTestCase):
         ]
         operations_b = [
             migrations.AlterField(
-                model_name='nullpkparent',
+                model_name='onetooneparent',
                 name='id',
                 field=models.BigAutoField(primary_key=True),
             ),
         ]
 
         conn = django.db.connections[DEFAULT_DB_ALIAS]
-        initial_migration = Migration('nullpk_related_initial', 'testapp')
+        initial_migration = Migration('pk_widening_related_initial', 'testapp')
         initial_migration.operations = operations_a
-        widen_migration = Migration('nullpk_related_widen', 'testapp')
+        widen_migration = Migration('pk_widening_related_widen', 'testapp')
         widen_migration.operations = operations_b
 
         with conn.schema_editor(atomic=True) as editor:
@@ -4469,7 +4469,7 @@ class TestPkWideningMigrations(TransactionTestCase):
         with conn.schema_editor(atomic=True) as editor:
             final_state = widen_migration.apply(project_state, editor)
 
-        child = final_state.apps.get_model('testapp', 'NullPkChild')
+        child = final_state.apps.get_model('testapp', 'ChildWithNullableOneToOne')
         child_constraints = get_constraints(table_name=child._meta.db_table)
 
         self.assertEqual(self._unique_null_indexes(child_constraints, 'parent_id'), 1)
@@ -4480,7 +4480,7 @@ class TestPkWideningMigrations(TransactionTestCase):
             for info in child_constraints.values()
         ))
 
-        parent = final_state.apps.get_model('testapp', 'NullPkParent')
+        parent = final_state.apps.get_model('testapp', 'OneToOneParent')
         p = parent.objects.create(name='p1')
         child.objects.create(parent=None, alias=None)
         child.objects.create(parent=None, alias=None)
@@ -4499,18 +4499,18 @@ class TestPkWideningMigrations(TransactionTestCase):
         """
         operations_a = [
             migrations.CreateModel(
-                name='NullPkRef',
+                name='ReferencedParent',
                 fields=[
                     ('id', models.AutoField(primary_key=True)),
                 ],
             ),
             migrations.CreateModel(
-                name='NullPkOwn',
+                name='WidenedModelWithNullableUnique',
                 fields=[
                     ('id', models.AutoField(primary_key=True)),
                     ('ref', models.OneToOneField(
                         on_delete=models.CASCADE,
-                        to='testapp.nullpkref',
+                        to='testapp.referencedparent',
                         null=True,
                     )),
                     ('code', models.CharField(max_length=20, unique=True, null=True)),
@@ -4519,16 +4519,16 @@ class TestPkWideningMigrations(TransactionTestCase):
         ]
         operations_b = [
             migrations.AlterField(
-                model_name='nullpkown',
+                model_name='widenedmodelwithnullableunique',
                 name='id',
                 field=models.BigAutoField(primary_key=True),
             ),
         ]
 
         conn = django.db.connections[DEFAULT_DB_ALIAS]
-        initial_migration = Migration('nullpk_own_initial', 'testapp')
+        initial_migration = Migration('pk_widening_own_initial', 'testapp')
         initial_migration.operations = operations_a
-        widen_migration = Migration('nullpk_own_widen', 'testapp')
+        widen_migration = Migration('pk_widening_own_widen', 'testapp')
         widen_migration.operations = operations_b
 
         with conn.schema_editor(atomic=True) as editor:
@@ -4536,7 +4536,7 @@ class TestPkWideningMigrations(TransactionTestCase):
         with conn.schema_editor(atomic=True) as editor:
             final_state = widen_migration.apply(project_state, editor)
 
-        own = final_state.apps.get_model('testapp', 'NullPkOwn')
+        own = final_state.apps.get_model('testapp', 'WidenedModelWithNullableUnique')
         own_constraints = get_constraints(table_name=own._meta.db_table)
 
         self.assertEqual(self._unique_null_indexes(own_constraints, 'ref_id'), 1)
@@ -4561,12 +4561,12 @@ class TestPkWideningMigrations(TransactionTestCase):
         """
         operations_a = [
             migrations.CreateModel(
-                name='NullPkSelf',
+                name='SelfReferencingModel',
                 fields=[
                     ('id', models.AutoField(primary_key=True)),
                     ('self_ref', models.OneToOneField(
                         on_delete=models.CASCADE,
-                        to='testapp.nullpkself',
+                        to='testapp.selfreferencingmodel',
                         null=True,
                     )),
                 ],
@@ -4574,16 +4574,16 @@ class TestPkWideningMigrations(TransactionTestCase):
         ]
         operations_b = [
             migrations.AlterField(
-                model_name='nullpkself',
+                model_name='selfreferencingmodel',
                 name='id',
                 field=models.BigAutoField(primary_key=True),
             ),
         ]
 
         conn = django.db.connections[DEFAULT_DB_ALIAS]
-        initial_migration = Migration('nullpk_self_initial', 'testapp')
+        initial_migration = Migration('pk_widening_self_initial', 'testapp')
         initial_migration.operations = operations_a
-        widen_migration = Migration('nullpk_self_widen', 'testapp')
+        widen_migration = Migration('pk_widening_self_widen', 'testapp')
         widen_migration.operations = operations_b
 
         with conn.schema_editor(atomic=True) as editor:
@@ -4591,7 +4591,7 @@ class TestPkWideningMigrations(TransactionTestCase):
         with conn.schema_editor(atomic=True) as editor:
             final_state = widen_migration.apply(project_state, editor)
 
-        model = final_state.apps.get_model('testapp', 'NullPkSelf')
+        model = final_state.apps.get_model('testapp', 'SelfReferencingModel')
         constraints = get_constraints(table_name=model._meta.db_table)
 
         self.assertEqual(self._unique_null_indexes(constraints, 'self_ref_id'), 1)
@@ -4617,38 +4617,38 @@ class TestPkWideningMigrations(TransactionTestCase):
         """
         operations = [
             migrations.CreateModel(
-                name='NullPkRefCombined',
+                name='ReferencedParentCombined',
                 fields=[
                     ('id', models.AutoField(primary_key=True)),
                 ],
             ),
             migrations.CreateModel(
-                name='NullPkOwnCombined',
+                name='WidenedModelWithNullableUniqueCombined',
                 fields=[
                     ('id', models.AutoField(primary_key=True)),
                     ('ref', models.OneToOneField(
                         on_delete=models.CASCADE,
-                        to='testapp.nullpkrefcombined',
+                        to='testapp.referencedparentcombined',
                         null=True,
                     )),
                     ('code', models.CharField(max_length=20, unique=True, null=True)),
                 ],
             ),
             migrations.AlterField(
-                model_name='nullpkowncombined',
+                model_name='widenedmodelwithnullableuniquecombined',
                 name='id',
                 field=models.BigAutoField(primary_key=True),
             ),
         ]
 
         conn = django.db.connections[DEFAULT_DB_ALIAS]
-        combined_migration = Migration('nullpk_own_combined', 'testapp')
+        combined_migration = Migration('pk_widening_own_combined', 'testapp')
         combined_migration.operations = operations
 
         with conn.schema_editor(atomic=True) as editor:
             final_state = combined_migration.apply(ProjectState(), editor)
 
-        own = final_state.apps.get_model('testapp', 'NullPkOwnCombined')
+        own = final_state.apps.get_model('testapp', 'WidenedModelWithNullableUniqueCombined')
         own_constraints = get_constraints(table_name=own._meta.db_table)
 
         self.assertEqual(self._unique_null_indexes(own_constraints, 'ref_id'), 1)
@@ -4679,39 +4679,39 @@ class TestPkWideningMigrations(TransactionTestCase):
         """
         operations = [
             migrations.CreateModel(
-                name='NullPkParentCombined',
+                name='ParentCombined',
                 fields=[
                     ('id', models.AutoField(primary_key=True)),
                     ('name', models.CharField(max_length=20, default='x')),
                 ],
             ),
             migrations.CreateModel(
-                name='NullPkChildCombined',
+                name='ChildWithNullableOneToOneCombined',
                 fields=[
                     ('id', models.AutoField(primary_key=True)),
                     ('parent', models.OneToOneField(
                         on_delete=models.CASCADE,
-                        to='testapp.nullpkparentcombined',
+                        to='testapp.parentcombined',
                         null=True,
                     )),
                     ('alias', models.CharField(max_length=20, unique=True, null=True)),
                 ],
             ),
             migrations.AlterField(
-                model_name='nullpkparentcombined',
+                model_name='parentcombined',
                 name='id',
                 field=models.BigAutoField(primary_key=True),
             ),
         ]
 
         conn = django.db.connections[DEFAULT_DB_ALIAS]
-        combined_migration = Migration('nullpk_related_combined', 'testapp')
+        combined_migration = Migration('pk_widening_related_combined', 'testapp')
         combined_migration.operations = operations
 
         with conn.schema_editor(atomic=True) as editor:
             final_state = combined_migration.apply(ProjectState(), editor)
 
-        child = final_state.apps.get_model('testapp', 'NullPkChildCombined')
+        child = final_state.apps.get_model('testapp', 'ChildWithNullableOneToOneCombined')
         child_constraints = get_constraints(table_name=child._meta.db_table)
 
         self.assertEqual(self._unique_null_indexes(child_constraints, 'parent_id'), 1)
@@ -4728,7 +4728,7 @@ class TestPkWideningMigrations(TransactionTestCase):
             for info in child_constraints.values()
         ))
 
-        parent = final_state.apps.get_model('testapp', 'NullPkParentCombined')
+        parent = final_state.apps.get_model('testapp', 'ParentCombined')
         p = parent.objects.create(name='p1')
         child.objects.create(parent=None, alias=None)
         child.objects.create(parent=p, alias='a')
