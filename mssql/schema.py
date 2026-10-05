@@ -723,6 +723,28 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             not field.many_to_many and field.null and field.unique
         )
 
+    def _column_create_already_queued(self, table, column, post_actions):
+        """Whether a CREATE for `column`'s filtered unique index is already queued
+        in self.deferred_sql or post_actions/other_actions.
+
+        Deliberately avoids str()-comparing against not-yet-executed Statements:
+        a Statement's IndexName part memoizes its generated name on first
+        __str__ and never recomputes it. If some other str() call (e.g. this
+        same check, run earlier for a different field) froze that name before
+        a later RenameField updated the Statement's column reference in place,
+        string comparison would see a stale name and wrongly conclude the
+        pending statement is unrelated - creating a duplicate index here that
+        collides with the stale one once self.deferred_sql is flushed.
+        references_column() reads the live (possibly renamed) column list
+        directly and never touches the memoized name.
+        """
+        def references(sql):
+            return isinstance(sql, DjStatement) and sql.references_column(table, column)
+
+        return (
+            any(references(sql) for sql in self.deferred_sql)
+            or any(references(action[0]) for action in post_actions)
+        )
 
     def _alter_field(self, model, old_field, new_field, old_type, new_type,
                      old_db_params, new_db_params, strict=False):
@@ -1379,9 +1401,9 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                 statement = self._create_index_sql(
                     model, [field], sql=self.sql_create_unique_null, suffix="_uniq"
                 )
-                if (str(statement)
-                        not in [str(sql) for sql in self.deferred_sql] + [str(s[0]) for s in post_actions]
-                        ):
+                if not self._column_create_already_queued(
+                    model._meta.db_table, field.column, post_actions
+                ):
                     self.execute(statement)
 
             # --------------------------------------------------------------------------------
@@ -1551,9 +1573,9 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                         new_rel.related_model, [field],
                         sql=self.sql_create_unique_null, suffix="_uniq",
                     )
-                    if (str(statement)
-                            not in [str(sql) for sql in self.deferred_sql] + [str(a[0]) for a in other_actions]
-                            ):
+                    if not self._column_create_already_queued(
+                        new_rel.related_model._meta.db_table, field.column, other_actions
+                    ):
                         self.execute(statement)
             # Restore unique_together clauses
             for field_names in new_rel.related_model._meta.unique_together:
