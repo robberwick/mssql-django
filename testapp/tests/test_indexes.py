@@ -4735,6 +4735,73 @@ class TestPkWideningMigrations(TransactionTestCase):
         with self.assertRaises(IntegrityError), transaction.atomic():
             child.objects.create(parent=p, alias='b')
 
+    def test_widening_after_rename_does_not_duplicate_nullable_unique_index_on_related_model(self):
+        """
+        A nullable-unique field deferred by CreateModel, then renamed, then
+        carried through a related model's primary-key widening - all within
+        one migration/schema_editor - must end up with exactly one filtered
+        unique index on its (renamed) column, named for the field's current
+        identifier. No duplicate index, and no leftover index named for the
+        field's pre-rename identifier, should occur.
+        """
+        operations = [
+            migrations.CreateModel(
+                name='RenameWidenParent',
+                fields=[
+                    ('id', models.AutoField(primary_key=True)),
+                ],
+            ),
+            migrations.CreateModel(
+                name='RenameWidenChild',
+                fields=[
+                    ('id', models.AutoField(primary_key=True)),
+                    ('parent', models.OneToOneField(
+                        on_delete=models.CASCADE,
+                        to='testapp.renamewidenparent',
+                        null=True,
+                    )),
+                    ('alias', models.CharField(max_length=20, unique=True, null=True)),
+                ],
+            ),
+            # Widen the child's OWN pk first: its is_autofield_change restore path
+            # calls str() on self.deferred_sql, which still holds alias's deferred
+            # CREATE UNIQUE INDEX from CreateModel above, memoizing its name.
+            migrations.AlterField(
+                model_name='renamewidenchild',
+                name='id',
+                field=models.BigAutoField(primary_key=True),
+            ),
+            migrations.RenameField(
+                model_name='renamewidenchild', old_name='alias', new_name='nickname',
+            ),
+            # Widening the parent's pk cascades to RenameWidenChild.parent_id and
+            # restores RenameWidenChild's other fields, including the renamed
+            # nullable-unique 'nickname' column.
+            migrations.AlterField(
+                model_name='renamewidenparent',
+                name='id',
+                field=models.BigAutoField(primary_key=True),
+            ),
+        ]
+
+        conn = django.db.connections[DEFAULT_DB_ALIAS]
+        combined_migration = Migration('pk_widening_rename_combined', 'testapp')
+        combined_migration.operations = operations
+
+        with conn.schema_editor(atomic=True) as editor:
+            final_state = combined_migration.apply(ProjectState(), editor)
+
+        child = final_state.apps.get_model('testapp', 'RenameWidenChild')
+        child_constraints = get_constraints(table_name=child._meta.db_table)
+
+        # Exactly one filtered unique index on the renamed column - not two.
+        self.assertEqual(self._unique_null_indexes(child_constraints, 'nickname'), 1)
+        # ...and none of them still carries the pre-rename 'alias' identifier.
+        self.assertFalse(any(
+            'alias' in name for name in child_constraints
+        ))
+
+
 
 
 class TestAddAndAlterUniqueIndex(TestCase):
