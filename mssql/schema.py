@@ -1553,15 +1553,8 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                             new_rel.related_model, [new_rel.field.column], name=unique_name
                         )
                     )
-            # Restore related_model indexes. NOT NULL unique fields are restored via
-            # the PK/unique CONSTRAINT blocks above; nullable unique fields are
-            # enforced by a filtered unique index (not a CONSTRAINT, not db_index),
-            # recreated here instead. Guarded against deferred_sql/other_actions:
-            # create_model() defers a nullable-unique field's index CREATE rather
-            # than executing it immediately, so a combined migration (CreateModel
-            # for this related model + the PK widening, in the same schema_editor)
-            # can reach this loop before that deferred statement has been flushed;
-            # recreating it here unconditionally would collide with it at editor exit.
+            # Restore related_model indexes: NOT NULL unique fields via the PK/UNIQUE
+            # constraint blocks above; nullable-unique fields via a filtered index below.
             for field in new_rel.related_model._meta.fields:
                 if self._field_should_be_indexed(new_rel.related_model, field):
                     self.execute(
